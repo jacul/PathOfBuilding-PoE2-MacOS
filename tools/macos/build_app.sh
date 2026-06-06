@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 build_dir="${repo_root}/build/macos-arm64"
+app_dir="${repo_root}/PathOfBuilding-PoE2"
 
 for tool in cmake ninja pkg-config; do
   if ! command -v "${tool}" >/dev/null 2>&1; then
@@ -18,7 +19,21 @@ for package in sdl3 luajit libzstd; do
   fi
 done
 
+# The Path of Building Lua application lives in the upstream git submodule.
+if [[ ! -f "${app_dir}/src/Launch.lua" ]]; then
+  echo "Initialising Path of Building app submodule..."
+  git -C "${repo_root}" submodule update --init --recursive
+fi
+
 cmake -S "${repo_root}/macos" -B "${build_dir}" -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build "${build_dir}"
 
-echo "${build_dir}/PathOfBuilding-PoE2.app"
+app="${build_dir}/PathOfBuilding-PoE2.app"
+echo "${app}"
+
+# Hint for a development run. Launched from inside the submodule the host finds
+# its Lua there; the submodule's untagged manifest puts the app in dev mode, so
+# builds/settings stay in the checkout instead of ~/Library (and the in-app
+# updater is off). The patches/ are only applied to packaged release bundles.
+echo "Dev run:" >&2
+echo "  ( cd \"${app_dir}\" && \"${app}/Contents/MacOS/PathOfBuilding-PoE2\" )" >&2

@@ -60,7 +60,7 @@ Feature requests are always welcome. Note that not all requests will receive an 
 ## Contributing code
 
 ### Before submitting a pull request:
-* Familiarise yourself with the code base [here](docs/rundown.md) to get you started.
+* Familiarise yourself with the code base [here](PathOfBuilding-PoE2/docs/rundown.md) to get you started.
 * For questions about this **macOS port** (the native host, build, or packaging),
   open an issue or discussion on this repository.
 * For questions about the **calculation engine or game data**, the upstream
@@ -119,7 +119,7 @@ The easiest way to make and test changes is by setting up a development installa
 
 1. Clone this repository (the macOS port) using this command:
 
-       git clone https://github.com/stevep51/PathOfBuilding-PoE2-MacOS.git
+       git clone https://github.com/jacul/PathOfBuilding-PoE2-MacOS.git
 
 2. Go to the folder on your Mac where you cloned it (e.g. `~/repos/PathOfBuilding-PoE2-MacOS`).
 
@@ -315,9 +315,9 @@ After running `docker-compose up` the code will wait at the `dbg.waitIDE()` line
 
 ## Path of Building development tutorials
 
-* [How are mods parsed?](docs/addingMods.md)
-* [Mod Syntax](docs/modSyntax.md)
-* [How skills work in Path of Building](docs/addingSkills.md)
+* [How are mods parsed?](PathOfBuilding-PoE2/docs/addingMods.md)
+* [Mod Syntax](PathOfBuilding-PoE2/docs/modSyntax.md)
+* [How skills work in Path of Building](PathOfBuilding-PoE2/docs/addingSkills.md)
 
 ## Exporting GGPK data from Path of Exile
 > [!NOTE]

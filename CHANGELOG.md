@@ -6,7 +6,7 @@
 > [upstream project](https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2),
 > **not** changes specific to this macOS port. For macOS-port changes (the native
 > host, build, packaging), see this repository's
-> [GitHub Releases](https://github.com/stevep51/PathOfBuilding-PoE2-MacOS/releases).
+> [GitHub Releases](https://github.com/jacul/PathOfBuilding-PoE2-MacOS/releases).
 
 ## [v0.16.0](https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2/tree/v0.16.0) (2026/05/30)
 
