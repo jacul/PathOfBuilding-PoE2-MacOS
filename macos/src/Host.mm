@@ -54,6 +54,8 @@ struct NativeImage {
     int cellWidth = 0;
     int cellHeight = 0;
     bool stackedAtlas = false;
+    int layerCount = 1;
+    int atlasColumns = 1;
 };
 
 struct TextSegment {
@@ -390,6 +392,8 @@ NativeImage* createTextureFromDecodedDds(SDL_Renderer* renderer, const DecodedDd
         image->cellWidth = decoded.cellWidth;
         image->cellHeight = decoded.cellHeight;
         image->stackedAtlas = true;
+        image->layerCount = std::max(1, decoded.layerCount);
+        image->atlasColumns = std::max(1, decoded.atlasColumns);
     }
     return image;
 }
@@ -431,41 +435,39 @@ NativeImage* loadDdsImage(SDL_Renderer* renderer, const fs::path& path) {
     return createTextureFromDecodedDds(renderer, decoded);
 }
 
-bool isStackIndexDraw(float tcLeft, float tcTop, float tcRight, float tcBottom) {
-    return tcLeft >= 1.0f &&
-        tcLeft == std::floor(tcLeft) &&
-        tcTop == 0.0f &&
-        tcRight == 1.0f &&
-        tcBottom == 1.0f;
+// Pixel origin of a given array layer within the grid atlas.
+void layerOrigin(NativeImage* image, int stackLayer, float& ox, float& oy) {
+    const int layers = std::max(1, image->layerCount);
+    const int cols = std::max(1, image->atlasColumns);
+    const int layer = std::min(std::max(0, stackLayer), layers - 1);
+    const int col = layer % cols;
+    const int row = layer / cols;
+    ox = static_cast<float>(col * image->cellWidth);
+    oy = static_cast<float>(row * image->cellHeight);
 }
 
-bool sourceRectForImage(
+// Build the source pixel rect for DrawImage from UV coords (within one cell,
+// 0..1) plus the selected array layer.
+bool computeImageSrcRect(
     NativeImage* image,
-    float tcLeft,
-    float tcTop,
-    float tcRight,
-    float tcBottom,
+    float uvL,
+    float uvT,
+    float uvR,
+    float uvB,
+    int stackLayer,
     SDL_FRect& src
 ) {
     if (!image || image->atlasWidth <= 0 || image->atlasHeight <= 0) {
         return false;
     }
-
-    if (image->stackedAtlas && isStackIndexDraw(tcLeft, tcTop, tcRight, tcBottom)) {
-        const int index = std::max(0, static_cast<int>(tcLeft) - 1);
-        src.x = 0.0f;
-        src.y = static_cast<float>(index * image->cellHeight);
-        src.w = static_cast<float>(image->cellWidth);
-        src.h = static_cast<float>(image->cellHeight);
-        return true;
-    }
-
-    const float atlasW = static_cast<float>(image->atlasWidth);
-    const float atlasH = static_cast<float>(image->atlasHeight);
-    src.x = tcLeft * atlasW;
-    src.y = tcTop * atlasH;
-    src.w = (tcRight - tcLeft) * atlasW;
-    src.h = (tcBottom - tcTop) * atlasH;
+    float ox = 0.0f, oy = 0.0f;
+    layerOrigin(image, stackLayer, ox, oy);
+    const float cw = static_cast<float>(image->cellWidth);
+    const float ch = static_cast<float>(image->cellHeight);
+    src.x = ox + uvL * cw;
+    src.y = oy + uvT * ch;
+    src.w = (uvR - uvL) * cw;
+    src.h = (uvB - uvT) * ch;
     if (src.w < 0.0f) {
         src.x += src.w;
         src.w = -src.w;
@@ -477,34 +479,15 @@ bool sourceRectForImage(
     return src.w > 0.0f && src.h > 0.0f;
 }
 
-bool isStackIndexQuadDraw(float s1, float t1, float s2, float t2, float s3, float t3, float s4, float t4) {
-    return s1 >= 1.0f &&
-        s1 == std::floor(s1) &&
-        t1 == 0.0f &&
-        t2 == 0.0f &&
-        t3 == 0.0f &&
-        t4 == 0.0f &&
-        s2 == 0.0f &&
-        s3 == 0.0f &&
-        s4 == 0.0f;
-}
-
-void stackIndexTexCoords(NativeImage* image, float stackIndex, float& s1, float& t1, float& s2, float& t2, float& s3, float& t3, float& s4, float& t4) {
-    const int index = std::max(0, static_cast<int>(stackIndex) - 1);
+// Map a per-cell UV (0..1) for a quad vertex into normalized atlas coords for
+// the selected array layer.
+void cellUvToAtlas(NativeImage* image, int stackLayer, float uvS, float uvT, float& outS, float& outT) {
+    float ox = 0.0f, oy = 0.0f;
+    layerOrigin(image, stackLayer, ox, oy);
     const float atlasW = static_cast<float>(image->atlasWidth);
     const float atlasH = static_cast<float>(image->atlasHeight);
-    const float left = 0.0f;
-    const float right = static_cast<float>(image->cellWidth) / atlasW;
-    const float top = static_cast<float>(index * image->cellHeight) / atlasH;
-    const float bottom = static_cast<float>((index + 1) * image->cellHeight) / atlasH;
-    s1 = left;
-    t1 = top;
-    s2 = right;
-    t2 = top;
-    s3 = right;
-    t3 = bottom;
-    s4 = left;
-    t4 = bottom;
+    outS = (ox + uvS * static_cast<float>(image->cellWidth)) / atlasW;
+    outT = (oy + uvT * static_cast<float>(image->cellHeight)) / atlasH;
 }
 
 NativeImage* loadCocoaImage(SDL_Renderer* renderer, const fs::path& path) {
@@ -1914,17 +1897,30 @@ int Host::l_DrawImage(lua_State* L) {
     const bool requestedImage = lua_istable(L, 1);
     NativeImage* image = imageFromLua(L, 1);
     if (image && image->texture) {
-        SDL_FRect src{};
-        bool hasSrc = false;
-        if (lua_gettop(L) >= 9 && !lua_isnil(L, 6)) {
-            float tcLeft = static_cast<float>(luaL_optnumber(L, 6, 0.0));
-            float tcTop = static_cast<float>(luaL_optnumber(L, 7, 0.0));
-            float tcRight = static_cast<float>(luaL_optnumber(L, 8, 1.0));
-            float tcBottom = static_cast<float>(luaL_optnumber(L, 9, 1.0));
-            if (sourceRectForImage(image, tcLeft, tcTop, tcRight, tcBottom, src)) {
-                hasSrc = true;
-            }
+        // Arg layout (matches SimpleGraphic):
+        //   5: xy | 6: xy+stack | 7: xy+stack+mask
+        //   9: xy+uv | 10: xy+uv+stack | 11: xy+uv+stack+mask
+        const int n = lua_gettop(L);
+        const bool hasUV = (n >= 9);
+        int stackArg = 0;
+        switch (n) {
+            case 6: case 7: stackArg = 6; break;
+            case 10: case 11: stackArg = 10; break;
+            default: break;
         }
+        float uvL = 0.0f, uvT = 0.0f, uvR = 1.0f, uvB = 1.0f;
+        if (hasUV && !lua_isnil(L, 6)) {
+            uvL = static_cast<float>(luaL_optnumber(L, 6, 0.0));
+            uvT = static_cast<float>(luaL_optnumber(L, 7, 0.0));
+            uvR = static_cast<float>(luaL_optnumber(L, 8, 1.0));
+            uvB = static_cast<float>(luaL_optnumber(L, 9, 1.0));
+        }
+        int stackLayer = 0;
+        if (stackArg && lua_isnumber(L, stackArg)) {
+            stackLayer = static_cast<int>(lua_tointeger(L, stackArg)) - 1;
+        }
+        SDL_FRect src{};
+        const bool hasSrc = computeImageSrcRect(image, uvL, uvT, uvR, uvB, stackLayer, src);
         DrawCommand& cmd = current->newDrawCommand(DrawCommand::Type::Texture);
         cmd.rect = rect;
         cmd.texture = image->texture;
@@ -1954,26 +1950,35 @@ int Host::l_DrawImageQuad(lua_State* L) {
     }
     const bool requestedImage = lua_istable(L, 1);
     NativeImage* image = imageFromLua(L, 1);
-    if (image && image->texture && lua_gettop(L) >= 16) {
-        float s1 = static_cast<float>(luaL_optnumber(L, 10, 0.0));
-        float t1 = static_cast<float>(luaL_optnumber(L, 11, 0.0));
-        float s2 = static_cast<float>(luaL_optnumber(L, 12, 0.0));
-        float t2 = static_cast<float>(luaL_optnumber(L, 13, 0.0));
-        float s3 = static_cast<float>(luaL_optnumber(L, 14, 0.0));
-        float t3 = static_cast<float>(luaL_optnumber(L, 15, 0.0));
-        float s4 = static_cast<float>(luaL_optnumber(L, 16, 0.0));
-        float t4 = static_cast<float>(luaL_optnumber(L, 17, 0.0));
-        if (image->stackedAtlas && isStackIndexQuadDraw(s1, t1, s2, t2, s3, t3, s4, t4)) {
-            stackIndexTexCoords(image, s1, s1, t1, s2, t2, s3, t3, s4, t4);
+    if (image && image->texture) {
+        // Arg layout (matches SimpleGraphic):
+        //   9: xy | 10: xy+stack | 11: xy+stack+mask
+        //   17: xy+uv | 18: xy+uv+stack | 19: xy+uv+stack+mask
+        const int n = lua_gettop(L);
+        const bool hasUV = (n >= 17);
+        int stackArg = 0;
+        switch (n) {
+            case 10: case 11: stackArg = 10; break;
+            case 18: case 19: stackArg = 18; break;
+            default: break;
         }
-        vertices[0].tex_coord.x = s1;
-        vertices[0].tex_coord.y = t1;
-        vertices[1].tex_coord.x = s2;
-        vertices[1].tex_coord.y = t2;
-        vertices[2].tex_coord.x = s3;
-        vertices[2].tex_coord.y = t3;
-        vertices[3].tex_coord.x = s4;
-        vertices[3].tex_coord.y = t4;
+        // Per-cell UV (0..1) per vertex; default covers the whole cell.
+        float st[8] = {0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
+        if (hasUV) {
+            for (int i = 0; i < 8; ++i) {
+                st[i] = static_cast<float>(luaL_optnumber(L, 10 + i, 0.0));
+            }
+        }
+        int stackLayer = 0;
+        if (stackArg && lua_isnumber(L, stackArg)) {
+            stackLayer = static_cast<int>(lua_tointeger(L, stackArg)) - 1;
+        }
+        for (int i = 0; i < 4; ++i) {
+            float s = 0.0f, t = 0.0f;
+            cellUvToAtlas(image, stackLayer, st[i * 2], st[i * 2 + 1], s, t);
+            vertices[i].tex_coord.x = s;
+            vertices[i].tex_coord.y = t;
+        }
         DrawCommand& cmd = current->newDrawCommand(DrawCommand::Type::Geometry);
         std::memcpy(cmd.verts, vertices, sizeof(vertices));
         cmd.texture = image->texture;

@@ -35,6 +35,8 @@ struct DdsHeaderInfo {
     size_t dataOffset = 0;
     size_t dataSize = 0;
     int rowPitch = 0;
+    int mipCount = 1;
+    int arraySize = 1;
 };
 
 uint32_t readU32(const std::vector<unsigned char>& data, size_t offset) {
@@ -53,9 +55,12 @@ bool parseDdsHeader(const std::vector<unsigned char>& data, DdsHeaderInfo& info)
         return false;
     }
 
-    info.cellWidth = static_cast<int>(readU32(data, 12));
-    info.cellHeight = static_cast<int>(readU32(data, 16));
+    // DDS header: dwHeight is at offset 12, dwWidth at offset 16.
+    info.cellHeight = static_cast<int>(readU32(data, 12));
+    info.cellWidth = static_cast<int>(readU32(data, 16));
     const uint32_t linearSize = readU32(data, 20);
+    const uint32_t mipCount = readU32(data, 28);
+    info.mipCount = mipCount > 0 ? static_cast<int>(mipCount) : 1;
     const uint32_t fourCc = readU32(data, 84);
 
     info.dataOffset = 128;
@@ -64,6 +69,8 @@ bool parseDdsHeader(const std::vector<unsigned char>& data, DdsHeaderInfo& info)
             return false;
         }
         const uint32_t dxgiFormat = readU32(data, 128);
+        const uint32_t arraySize = readU32(data, 140);
+        info.arraySize = arraySize > 0 ? static_cast<int>(arraySize) : 1;
         info.dataOffset = 148;
         if (dxgiFormat == kDxgiBc1Unorm) {
             info.format = DdsFormat::Bc1;
@@ -257,6 +264,94 @@ void decodeRgba8Region(
         }
     }
 }
+
+// Size in bytes of the first `levels` mip levels of one surface.
+size_t mipChainSizeLevels(int width, int height, DdsFormat format, int levels) {
+    size_t total = 0;
+    int w = width;
+    int h = height;
+    for (int level = 0; level < levels && w >= 1 && h >= 1; ++level) {
+        if (format == DdsFormat::Rgba8) {
+            total += static_cast<size_t>(w) * h * 4;
+        } else {
+            const int blockBytes = format == DdsFormat::Bc7 ? 16 : 8;
+            const int blocksX = std::max(1, (w + 3) / 4);
+            const int blocksY = std::max(1, (h + 3) / 4);
+            total += static_cast<size_t>(blocksX) * blocksY * blockBytes;
+        }
+        if (w == 1 && h == 1) {
+            break;
+        }
+        w = std::max(1, w / 2);
+        h = std::max(1, h / 2);
+    }
+    return total;
+}
+
+// Decode a single cell (mip 0) into a freshly sized cellW x cellH RGBA buffer.
+bool decodeCell(const unsigned char* mip0, int cellW, int cellH, DdsFormat format, std::vector<unsigned char>& cell) {
+    cell.assign(static_cast<size_t>(cellW) * cellH * 4, 0);
+    switch (format) {
+        case DdsFormat::Bc1: decodeBc1Region(mip0, cellW, cellH, cell); return true;
+        case DdsFormat::Bc7: decodeBc7Region(mip0, cellW, cellH, cell); return true;
+        case DdsFormat::Rgba8: decodeRgba8Region(mip0, cellW, cellH, cellW * 4, cell); return true;
+        default: return false;
+    }
+}
+
+// Decode a DDS texture array (arraySize > 1) into a grid atlas. Each array
+// layer is one cell; layers are packed left-to-right, top-to-bottom into a
+// grid sized to stay within GPU texture limits (16384 px per dimension).
+bool decodeDdsArray(const std::vector<unsigned char>& data, const DdsHeaderInfo& info, DecodedDds& out) {
+    const int cellW = info.cellWidth;
+    const int cellH = info.cellHeight;
+    if (cellW <= 0 || cellH <= 0 || info.arraySize <= 0) {
+        return false;
+    }
+    const size_t perLayer = mipChainSizeLevels(cellW, cellH, info.format, info.mipCount);
+    if (perLayer == 0 || info.dataSize < perLayer * static_cast<size_t>(info.arraySize)) {
+        return false;
+    }
+
+    constexpr int kMaxTexDim = 16384;
+    int cols = std::max(1, kMaxTexDim / cellW);
+    cols = std::min(cols, info.arraySize);
+    int rows = (info.arraySize + cols - 1) / cols;
+    // Grow columns until the grid height also fits the texture limit.
+    while (rows * cellH > kMaxTexDim && cols < info.arraySize) {
+        ++cols;
+        rows = (info.arraySize + cols - 1) / cols;
+    }
+    const int atlasW = cols * cellW;
+    const int atlasH = rows * cellH;
+
+    out.rgba.assign(static_cast<size_t>(atlasW) * atlasH * 4, 0);
+    std::vector<unsigned char> cell;
+    for (int layer = 0; layer < info.arraySize; ++layer) {
+        const unsigned char* mip0 = data.data() + info.dataOffset + static_cast<size_t>(layer) * perLayer;
+        if (!decodeCell(mip0, cellW, cellH, info.format, cell)) {
+            return false;
+        }
+        const int col = layer % cols;
+        const int row = layer / cols;
+        const int dstX = col * cellW;
+        const int dstY = row * cellH;
+        for (int y = 0; y < cellH; ++y) {
+            const unsigned char* srcRow = cell.data() + static_cast<size_t>(y) * cellW * 4;
+            unsigned char* dstRow = out.rgba.data() + (static_cast<size_t>(dstY + y) * atlasW + dstX) * 4;
+            std::memcpy(dstRow, srcRow, static_cast<size_t>(cellW) * 4);
+        }
+    }
+
+    out.cellWidth = cellW;
+    out.cellHeight = cellH;
+    out.atlasWidth = atlasW;
+    out.atlasHeight = atlasH;
+    out.stackedAtlas = true;
+    out.layerCount = info.arraySize;
+    out.atlasColumns = cols;
+    return true;
+}
 }
 
 bool zstdDecompressBytes(const std::vector<unsigned char>& input, std::vector<unsigned char>& output) {
@@ -280,6 +375,10 @@ bool decodeDdsBytes(const std::vector<unsigned char>& ddsData, DecodedDds& out) 
     DdsHeaderInfo info;
     if (!parseDdsHeader(ddsData, info)) {
         return false;
+    }
+
+    if (info.arraySize > 1) {
+        return decodeDdsArray(ddsData, info, out);
     }
 
     int atlasWidth = 0;
