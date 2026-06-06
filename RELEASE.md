@@ -157,7 +157,16 @@ Steps (manual):
 4. **Upload both the `.zip` and the `.zip.sha256` file** to the GitHub release.
    `SECURITY.md` tells users to verify the download against this checksum, so it
    must be attached to every release.
-5. The macOS build has no in-app updater; ship the `.zip` for users to download.
+5. The macOS build has no file-by-file updater; ship the `.zip` for users to
+   download. The in-app **Check for Update** button reads this port's
+   `releases/latest` tag (e.g. `v0.19.0-macos.2`) to detect newer builds and can
+   then download, verify, and install the new `.app` in place. For that to work:
+   - the release **tag must follow the `v<engine>-macos.<build>` scheme**, and
+     the GitHub Release must be **published** (not a draft);
+   - both `PathOfBuilding-PoE2-macos-arm64.zip` **and** its
+     `…-macos-arm64.zip.sha256` must be attached as release assets (the
+     `macos-release` workflow already uploads both) — the installer verifies the
+     zip against the published checksum before swapping the app.
 
 See [docs/macos.md](docs/macos.md) for build/test details.
 

@@ -1,0 +1,352 @@
+--- a/src/Modules/Main.lua
++++ b/src/Modules/Main.lua
+@@ -218,9 +218,11 @@
+ 	end
+ 	self.controls.checkUpdate = new("ButtonControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {0, -24, 140, 20}, "", function()
+ 		if launch.versionPlatform == "macos-arm64" then
+-			-- The native macOS build has no in-app updater, so send the user to
+-			-- this port's Releases page to download the latest version.
+-			OpenURL("https://github.com/jacul/PathOfBuilding-PoE2-MacOS/releases/latest")
++			-- The native macOS build has no file-by-file in-app updater. Instead,
++			-- query this port's GitHub releases and, when a newer build exists,
++			-- offer to download, verify, and install it in place (see patch 0003
++			-- and docs/macos.md).
++			self:CheckForUpdateMacOS()
+ 		else
+ 			launch:CheckForUpdate()
+ 		end
+@@ -230,11 +232,17 @@
+ 	end
+ 	self.controls.checkUpdate.label = function()
+ 		if launch.versionPlatform == "macos-arm64" then
+-			return "Check for Update"
++			if main.macUpdateInstalling then
++				return "Installing..."
++			end
++			return main.macUpdateChecking and "Checking..." or "Check for Update"
+ 		end
+ 		return launch.updateCheckRunning and launch.updateProgress or "Check for Update"
+ 	end
+ 	self.controls.checkUpdate.enabled = function()
++		if launch.versionPlatform == "macos-arm64" then
++			return not main.macUpdateChecking and not main.macUpdateInstalling
++		end
+ 		return not launch.updateCheckRunning
+ 	end
+ 	self.controls.forkLabel = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {148, -26, 0, 16}, "")
+@@ -1323,8 +1331,315 @@
+ 		end
+ 	end
+ 	xml.SaveXMLFile(localManXML[1], manifestLocation)
++end
++
++-- macOS port self-update.
++--
++-- The native macOS build ships as a whole .app inside a GitHub Release zip, so
++-- it cannot use upstream's file-by-file in-app updater (see patch 0001 and
++-- docs/macos.md). Instead we read this port's latest GitHub Release tag, which
++-- encodes both the upstream engine version and this port's build counter
++-- (e.g. "v0.19.0-macos.2"), compare it against the running build, and offer to
++-- install the new release: download the .app zip, verify it against the
++-- published SHA-256, and swap the bundle in place.
++local macUpdateRepo = "jacul/PathOfBuilding-PoE2-MacOS"
++local macUpdateReleasesPage = "https://github.com/"..macUpdateRepo.."/releases/latest"
++local macUpdateZipName = "PathOfBuilding-PoE2-macos-arm64.zip"
++-- The .app folder name inside the release zip (ditto --keepParent preserves it).
++local macUpdateAppName = "Path of Building (PoE2).app"
++
++-- Parse a dotted numeric version ("0.19.0") into a list of numbers so versions
++-- can be compared component-by-component (so 0.19 sorts above 0.9).
++local function parseVersionParts(str)
++	local parts = { }
++	for n in tostring(str or ""):gmatch("%d+") do
++		t_insert(parts, tonumber(n))
++	end
++	return parts
+ end
+ 
++-- Returns true when (engineB, buildB) is strictly newer than (engineA, buildA).
++local function isMacUpdateNewer(engineA, buildA, engineB, buildB)
++	local a, b = parseVersionParts(engineA), parseVersionParts(engineB)
++	for i = 1, m_max(#a, #b) do
++		local av, bv = a[i] or 0, b[i] or 0
++		if bv ~= av then
++			return bv > av
++		end
++	end
++	-- Same engine version: fall back to the port build counter.
++	return (buildB or 0) > (buildA or 0)
++end
++
++-- Quote a string for safe interpolation into a /bin/sh command.
++local function macShellQuote(str)
++	return "'"..tostring(str):gsub("'", "'\\''").."'"
++end
++
++-- Background worker: downloads the release zip + its checksum, verifies the
++-- checksum, and extracts the .app into "<tmpDir>/extracted". Everything here
++-- runs on the subscript's own thread (os.execute and lcurl do not marshal back
++-- to the main thread), so the UI keeps responding while it works. Returns true
++-- on success, or (nil, errMsg) on failure.
++local macUpdateWorker = [==[
++	local zipUrl, shaUrl, tmpDir, zipName = ...
++	local curl = require("lcurl.safe")
++	local function run(cmd)
++		return os.execute(cmd) == 0
++	end
++	local function download(url, outPath)
++		local file = io.open(outPath, "wb")
++		if not file then
++			return nil, "cannot write to "..outPath
++		end
++		local easy = curl.easy()
++		easy:setopt_url(url)
++		easy:setopt(curl.OPT_USERAGENT, "PathOfBuilding-macOS-Updater")
++		easy:setopt(curl.OPT_ACCEPT_ENCODING, "")
++		easy:setopt(curl.OPT_FOLLOWLOCATION, 1)
++		easy:setopt_writefunction(function(data)
++			file:write(data)
++			return true
++		end)
++		local _, err = easy:perform()
++		local code = easy:getinfo(curl.INFO_RESPONSE_CODE)
++		easy:close()
++		file:close()
++		if err then
++			return nil, err:msg()
++		end
++		if code ~= 200 then
++			return nil, "HTTP "..tostring(code)
++		end
++		return true
++	end
++	if not run("/bin/mkdir -p "..("'"..tmpDir.."'")) then
++		return nil, "Couldn't create the download folder."
++	end
++	ConPrintf("Downloading update from %s", zipUrl)
++	local ok, err = download(zipUrl, tmpDir.."/"..zipName)
++	if not ok then
++		return nil, "Download failed: "..tostring(err)
++	end
++	ok, err = download(shaUrl, tmpDir.."/"..zipName..".sha256")
++	if not ok then
++		return nil, "Couldn't download the checksum: "..tostring(err)
++	end
++	ConPrintf("Verifying checksum")
++	if not run("cd '"..tmpDir.."' && /usr/bin/shasum -a 256 -c '"..zipName..".sha256'") then
++		return nil, "Checksum verification failed (the download may be incomplete or corrupt)."
++	end
++	ConPrintf("Extracting update")
++	run("/bin/rm -rf '"..tmpDir.."/extracted'")
++	if not run("/bin/mkdir -p '"..tmpDir.."/extracted'") then
++		return nil, "Couldn't create the extract folder."
++	end
++	if not run("/usr/bin/ditto -x -k '"..tmpDir.."/"..zipName.."' '"..tmpDir.."/extracted'") then
++		return nil, "Couldn't extract the update archive."
++	end
++	return true
++]==]
++
++-- Locate the running .app bundle from the script path
++-- (<App>.app/Contents/Resources/src). Returns nil if it can't be derived (e.g.
++-- a dev run from a source checkout), in which case auto-install is unavailable.
++local function macAppBundlePath()
++	local scriptPath = GetScriptPath() or ""
++	-- App Translocation: a still-quarantined app launched from Downloads runs
++	-- from a randomised, read-only path, so swapping it in place is impossible
++	-- (and pointless). Fall back to a manual download in that case.
++	if scriptPath:match("/AppTranslocation/") then
++		return nil
++	end
++	local appPath = scriptPath:gsub("[/\\]Contents[/\\]Resources[/\\]src$", "")
++	if appPath ~= scriptPath and appPath:match("%.app$") then
++		return appPath
++	end
++	return nil
++end
++
++function main:CheckForUpdateMacOS()
++	if self.macUpdateChecking or self.macUpdateInstalling then
++		return
++	end
++	self.macUpdateChecking = true
++	launch:DownloadPage("https://api.github.com/repos/"..macUpdateRepo.."/releases/latest", function(response, errMsg)
++		self.macUpdateChecking = false
++		if errMsg then
++			self:OpenConfirmPopup("Check for Update",
++				"Couldn't check for updates:\n"..errMsg.."\n\nOpen the Releases page in your browser?",
++				"Open Page", function()
++					OpenURL(macUpdateReleasesPage)
++				end)
++			return
++		end
++		local dkjson = require("dkjson")
++		local release = dkjson.decode(response.body or "")
++		local tag = release and release.tag_name
++		local engine, build = tostring(tag or ""):match("^v?([%d%.]+)%-macos%.(%d+)$")
++		if not engine then
++			-- Unrecognised tag format; just send the user to the page.
++			self:OpenConfirmPopup("Check for Update",
++				"Couldn't read the latest version from GitHub.\n\nOpen the Releases page in your browser?",
++				"Open Page", function()
++					OpenURL((release and release.html_url) or macUpdateReleasesPage)
++				end)
++			return
++		end
++		local pageUrl = release.html_url or macUpdateReleasesPage
++		-- Describe a release by both versions that matter: the Path of Building
++		-- engine version (from upstream; drives the calculations/game data and
++		-- so most in-app behaviour) and this macOS port's build.
++		local function describe(pobVer, portBuild)
++			return "^7PoB ^x50E050"..pobVer.."  ^8(macOS port build "..portBuild..")"
++		end
++		local current = describe(launch.versionNumber, macPortBuild)
++		if not isMacUpdateNewer(launch.versionNumber, macPortBuild, engine, tonumber(build)) then
++			self:OpenMessagePopup("Check for Update",
++				"You're running the latest version.\n\n"..current)
++			return
++		end
++		-- Is this an engine bump (matters most) or a port-only rebuild?
++		local engineBumped = isMacUpdateNewer(launch.versionNumber, 0, engine, 0)
++		local kindNote = engineBumped
++			and "^7This updates the Path of Building engine."
++			or "^7This is a macOS port update (same Path of Building engine)."
++		local latest = describe(engine, build)
++		local msg =
++			"A newer version is available:\n\n"..
++			"^7Latest:   "..latest.."\n"..
++			"^7You have: "..current.."\n\n"..
++			kindNote
++		if macAppBundlePath() then
++			-- Can install in place: offer the full flow plus a manual fallback.
++			self:OpenConfirmPopup("Update Available",
++				msg.."\n\n^7Download and install it now? The app will restart when it's done.",
++				"Download & Install", function()
++					self:InstallUpdateMacOS(release)
++				end,
++				"Open Page", function()
++					OpenURL(pageUrl)
++				end)
++		else
++			-- Running from a checkout (no bundle to swap): manual download only.
++			self:OpenConfirmPopup("Update Available",
++				msg.."\n\n^7Open the download page in your browser?",
++				"Open Download Page", function()
++					OpenURL(pageUrl)
++				end)
++		end
++	end)
++end
++
++function main:InstallUpdateMacOS(release)
++	if self.macUpdateInstalling then
++		return
++	end
++	local pageUrl = (release and release.html_url) or macUpdateReleasesPage
++	local function failToPage(reason)
++		self.macUpdateInstalling = false
++		self:ClosePopup()
++		self:OpenConfirmPopup("Install Update",
++			reason.."\n\nOpen the Releases page in your browser instead?",
++			"Open Page", function()
++				OpenURL(pageUrl)
++			end)
++	end
++
++	-- Resolve the download URLs for the zip and its checksum.
++	local zipUrl, shaUrl
++	for _, asset in ipairs(release and release.assets or { }) do
++		if asset.name == macUpdateZipName then
++			zipUrl = asset.browser_download_url
++		elseif asset.name == macUpdateZipName..".sha256" then
++			shaUrl = asset.browser_download_url
++		end
++	end
++	local appPath = macAppBundlePath()
++	if not zipUrl or not shaUrl then
++		failToPage("This release doesn't have the expected download assets.")
++		return
++	end
++	if not appPath then
++		failToPage("Couldn't locate the application bundle to update.")
++		return
++	end
++
++	local tmpDir = "/tmp/PoBUpdate-"..os.time()
++	self.macUpdateInstalling = true
++
++	-- Non-dismissable progress popup (Cancel aborts the download).
++	local controls = { }
++	controls.msg = new("LabelControl", nil, {0, 20, 0, 16}, "^7Downloading and installing the update...")
++	controls.note = new("LabelControl", nil, {0, 40, 0, 16}, "^8The app will restart automatically when it's ready.")
++	local subId
++	controls.cancel = new("ButtonControl", nil, {0, 72, 90, 20}, "Cancel", function()
++		self.macUpdateInstalling = false
++		if subId then
++			AbortSubScript(subId)
++		end
++		self:ClosePopup()
++	end)
++	self:OpenPopup(440, 116, "Installing Update", controls, nil, nil, "cancel")
++
++	subId = LaunchSubScript(macUpdateWorker, "", "ConPrintf", zipUrl, shaUrl, tmpDir, macUpdateZipName)
++	if not subId then
++		failToPage("Couldn't start the update download.")
++		return
++	end
++	launch:RegisterSubScript(subId, function(ok, errMsg)
++		if not self.macUpdateInstalling then
++			-- Cancelled while downloading; ignore the late result.
++			return
++		end
++		if not ok then
++			failToPage("The update couldn't be installed:\n"..(errMsg or "Unknown error."))
++			return
++		end
++
++		-- The new bundle is staged and verified. Hand off to a detached helper
++		-- that waits for this app to quit, swaps the bundle in place, clears the
++		-- download quarantine, and relaunches. It must outlive this process, so
++		-- it polls for the running bundle by path rather than needing our PID.
++		local stagedApp = tmpDir.."/extracted/"..macUpdateAppName
++		local installerPath = tmpDir.."/installer.sh"
++		local installer = table.concat({
++			"#!/bin/sh",
++			"trap '' HUP",
++			"APP="..macShellQuote(appPath),
++			"STAGED="..macShellQuote(stagedApp),
++			"TMP="..macShellQuote(tmpDir),
++			'exec >"$TMP/installer.log" 2>&1',
++			"i=0",
++			'while pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1; do',
++			'\ti=$((i+1)); [ "$i" -ge 300 ] && break',
++			"\tsleep 0.2",
++			"done",
++			'[ -d "$STAGED" ] || { open "$APP"; exit 1; }',
++			'BAK="$TMP/previous.app"',
++			'rm -rf "$BAK"',
++			'if ! mv "$APP" "$BAK"; then open "$APP"; exit 1; fi',
++			'if ! /usr/bin/ditto "$STAGED" "$APP"; then rm -rf "$APP"; mv "$BAK" "$APP"; open "$APP"; exit 1; fi',
++			'/usr/bin/xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true',
++			'open "$APP"',
++			'rm -rf "$TMP"',
++			"",
++		}, "\n")
++		local file = io.open(installerPath, "w")
++		if not file then
++			failToPage("Couldn't write the installer script.")
++			return
++		end
++		file:write(installer)
++		file:close()
++
++		-- Launch the helper detached (& returns immediately) and quit so it can
++		-- replace the bundle and relaunch us.
++		SpawnProcess("/bin/sh "..macShellQuote(installerPath).." >/dev/null 2>&1 &")
++		Exit()
++	end)
++end
++
+ function main:OpenUpdatePopup()
+ 	local changeList = { }
+ 	local changelogName = launch.devMode and "../changelog.txt" or "changelog.txt"

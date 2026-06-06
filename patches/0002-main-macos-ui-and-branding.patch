@@ -41,12 +41,12 @@
  	self.controls.forkLabel = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {148, -26, 0, 16}, "")
  	self.controls.forkLabel.label = function()
 -		return "^8PoB Community Fork"
-+		return "^8macOS Port (build "..macPortBuild..")"
++		return "^8macOS port build "..macPortBuild
  	end
  	self.controls.versionLabel = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {148, -2, 0, 16}, "")
  	self.controls.versionLabel.label = function()
 -		return "^8Version: "..launch.versionNumber..(launch.versionBranch == "dev" and " (Dev)" or launch.versionBranch == "beta" and " (Beta)" or "")
-+		return "^8Version: "..launch.versionNumber..(launch.devMode and " (Dev)" or "")
++		return "^8PoB "..launch.versionNumber..(launch.devMode and " (Dev)" or "")
  	end
  	self.controls.devMode = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {0, -26, 0, 20}, colorCodes.NEGATIVE.."Dev Mode")
  	self.controls.devMode.shown = function()
@@ -58,7 +58,7 @@
 -	controls.forum = new("LabelControl", nil, {0, 36, 0, 18}, "^7Based on Openarl's Path of Building")
 -	controls.github = new("ButtonControl", nil, {0, 62, 480, 18}, "^7GitHub page: ^x4040FFhttps://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2", function(control)
 -		OpenURL("https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2")
-+	controls.version = new("LabelControl", nil, {0, 18, 0, 18}, "^7Path of Building (PoE2) - macOS Port v"..launch.versionNumber.." (build "..macPortBuild..")")
++	controls.version = new("LabelControl", nil, {0, 18, 0, 18}, "^7Path of Building (PoE2) - macOS Port (PoB "..launch.versionNumber..", build "..macPortBuild..")")
 +	controls.forum = new("LabelControl", nil, {0, 36, 0, 18}, "^7Native macOS port - based on Path of Building Community (PoE2)")
 +	controls.github = new("ButtonControl", nil, {0, 62, 480, 18}, "^7GitHub page: ^x4040FFhttps://github.com/jacul/PathOfBuilding-PoE2-MacOS", function(control)
 +		OpenURL("https://github.com/jacul/PathOfBuilding-PoE2-MacOS")

@@ -18,6 +18,11 @@ application is consumed pristine from upstream:
     (there is no Windows `Update.exe` on macOS).
   - `0002-main-macos-ui-and-branding.patch` — macOS UI tweaks + this port's
     GitHub/About links.
+  - `0003-macos-self-update.patch` — makes the **Check for Update** button read
+    this port's latest GitHub Release tag, compare it to the running build, and,
+    when a newer build exists, offer to download it, verify it against the
+    published SHA-256, and swap the `.app` in place (with **Open Page** as a
+    manual fallback).
 - `PathOfBuilding-PoE2/` — the upstream
   [PathOfBuildingCommunity/PathOfBuilding-PoE2](https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2)
   repository as a **git submodule, pinned to a specific engine release commit**.
@@ -118,8 +123,24 @@ Before release, verify the native host manually:
 - The packaged manifest tags the `<Version>` element with
   `platform="macos-arm64"`, so the app runs as a normal release rather than in
   developer mode.
-- The in-app auto-updater is disabled on macOS (the Windows `Update.exe` runtime
-  is not shipped). Update by downloading a newer release.
+- The Windows file-by-file auto-updater is disabled on macOS (the Windows
+  `Update.exe` runtime is not shipped and the app ships as a whole `.app`). In
+  its place, the **Check for Update** button queries this port's latest GitHub
+  Release tag (`releases/latest`) and tells you whether you are up to date. When
+  a newer build exists it offers **Download & Install**, which:
+  1. downloads the release zip + its `.sha256` to a temp folder (on a background
+     subscript, so the UI keeps responding),
+  2. verifies the zip against the published SHA-256 (`shasum -a 256 -c`) and
+     extracts the new `.app` with `ditto`,
+  3. writes a small detached helper script and quits; the helper waits for the
+     app to exit, swaps the `.app` in place (keeping a `previous.app` backup
+     until the copy succeeds), clears the download quarantine, and relaunches.
+
+  No native `Update.exe`-style helper is needed: macOS lets the detached `/bin/sh`
+  script replace the bundle, and it waits on the running app by bundle path
+  (`pgrep -f`) rather than needing a PID. **Open Page** remains as a manual
+  fallback, and dev runs from a source checkout (no `.app` to swap) only offer
+  the page.
 
 ## Release Notes
 
