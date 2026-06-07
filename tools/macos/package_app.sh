@@ -14,6 +14,28 @@ if [[ ! -f "${app_dir}/src/Launch.lua" ]]; then
   git -C "${repo_root}" submodule update --init --recursive
 fi
 
+# Version: the build number is the single hand-set value (CFBundleVersion in
+# macos/Info.plist.in, written by tools/macos/set_version.sh). The engine version
+# comes from the pinned submodule; CFBundleShortVersionString must mirror it.
+# Fail loudly on drift so a forgotten set_version after a submodule bump can't
+# ship a mislabelled build.
+# shellcheck source=tools/macos/lib/version.sh
+source "${repo_root}/tools/macos/lib/version.sh"
+plist="${repo_root}/macos/Info.plist.in"
+mac_build="$(version_build_from_plist "${plist}")"
+plist_engine="$(version_engine_from_plist "${plist}")"
+submodule_engine="$(version_engine_from_manifest "${app_dir}/manifest.xml")"
+if [[ -z "${mac_build}" || -z "${plist_engine}" || -z "${submodule_engine}" ]]; then
+  echo "error: couldn't read version fields (build='${mac_build}' plist_engine='${plist_engine}' submodule_engine='${submodule_engine}')." >&2
+  exit 1
+fi
+if [[ "${plist_engine}" != "${submodule_engine}" ]]; then
+  echo "error: engine version drift — CFBundleShortVersionString=${plist_engine} but the pinned submodule is ${submodule_engine}." >&2
+  echo "Run: tools/macos/set_version.sh ${mac_build}" >&2
+  exit 1
+fi
+echo "Packaging PoB ${plist_engine} (macOS port build ${mac_build}) -> tag v${plist_engine}-macos.${mac_build}"
+
 "${repo_root}/tools/macos/fetch_fonts.sh"
 "${repo_root}/tools/macos/build_app.sh"
 
@@ -54,6 +76,10 @@ for lua in UpdateCheck UpdateApply; do
   cp "${repo_root}/macos/lua/${lua}.lua" "${resources}/src/${lua}.lua"
 done
 
+# Inject the port build counter (single source of truth: CFBundleVersion) into
+# the bundled version label. The branding patch ships a "0" placeholder.
+version_inject_label "${resources}/src/Modules/Main.lua" "${mac_build}"
+
 mkdir -p "${resources}/runtime/SimpleGraphic"
 rsync -a "${app_dir}/runtime/SimpleGraphic/" "${resources}/runtime/SimpleGraphic/"
 rsync -a "${app_dir}/runtime/lua/" "${resources}/runtime/lua/"
@@ -61,26 +87,10 @@ rsync -a "${app_dir}/runtime/lua/" "${resources}/runtime/lua/"
 # platform so the app does not fall into "developer mode" (which shows the
 # Developer Mode warning and stores user data inside the app bundle). With a
 # platform set, user data is stored under ~/Library/Application Support.
-# Also mirror the port build counter (CFBundleVersion) into the manifest as
-# "macbuild" so the macOS UpdateCheck.lua can compare it against GitHub releases.
-mac_build="$(awk '/<key>CFBundleVersion<\/key>/{getline; gsub(/[^0-9]/,"",$0); print $0; exit}' "${repo_root}/macos/Info.plist.in")"
-python3 - "${app_dir}/manifest.xml" "${resources}/manifest.xml" "${mac_build}" <<'PY'
-import re, sys
-src, dst, macbuild = sys.argv[1], sys.argv[2], sys.argv[3]
-text = open(src, "r", encoding="utf-8").read()
-def add_attrs(match):
-    tag = match.group(0).rstrip()
-    if not tag.endswith("/>"):
-        return match.group(0)
-    inner = tag[:-2].rstrip()
-    if "platform=" not in inner:
-        inner += ' platform="macos-arm64"'
-    if "macbuild=" not in inner and macbuild:
-        inner += ' macbuild="%s"' % macbuild
-    return inner + ' />'
-text = re.sub(r'<Version\b[^>]*/>', add_attrs, text, count=1)
-open(dst, "w", encoding="utf-8").write(text)
-PY
+# Also mirror the port build counter (CFBundleVersion, read above) into the
+# manifest as "macbuild" so the macOS UpdateCheck.lua can compare it against
+# GitHub releases.
+version_write_manifest "${app_dir}/manifest.xml" "${resources}/manifest.xml" "${mac_build}"
 cp "${app_dir}/changelog.txt" "${resources}/changelog.txt"
 cp "${app_dir}/help.txt" "${resources}/help.txt"
 # Ship this port's LICENSE (carries the macOS-port + upstream credits), not the

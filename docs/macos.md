@@ -18,12 +18,15 @@ application is consumed pristine from upstream:
     in-app updater to a GitHub-release check + an in-place `.app` swap **without
     patching** `Launch.lua`/`Main.lua`. The stock update toast, "Update Ready"
     button and startup/periodic auto-check are reused unchanged.
-- `tools/macos/` — build/package scripts.
+- `tools/macos/` — build/package/version scripts (`build_app.sh`,
+  `package_app.sh`, `set_version.sh`), shared helpers in `lib/`, and unit tests
+  in `tests/`.
 - `patches/` — the only macOS-specific Lua **diffs**, applied to the **bundled**
   copy at package time (the submodule is never modified):
-  - `0001-main-macos-branding.patch` — cosmetic only: the About/GitHub links,
-    the version labels, and the `macPortBuild` counter shown in-app. The updater
-    is **not** patched — it is handled by the `macos/lua/` overrides above.
+  - `0001-main-macos-branding.patch` — cosmetic only: the About/GitHub links and
+    the version labels (incl. a `macPortBuild` placeholder that `package_app.sh`
+    fills in from `CFBundleVersion`). The updater is **not** patched — it is
+    handled by the `macos/lua/` overrides above.
 - `PathOfBuilding-PoE2/` — the upstream
   [PathOfBuildingCommunity/PathOfBuilding-PoE2](https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2)
   repository as a **git submodule, pinned to a specific engine release commit**.
@@ -94,8 +97,23 @@ globals registered in `macos/src/Host.mm`).
 
 ## Tests
 
-The upstream calculation and feature tests remain the authority for parity and
-run against the submodule:
+This port's own scripts (the `macos/lua/` updater overrides and the
+`tools/macos/` shell scripts) have unit tests under `tools/macos/tests/`:
+
+```bash
+tools/macos/tests/run.sh
+```
+
+It runs: `lint.sh` (shell `bash -n` + Lua `luajit` syntax for every script, plus
+`shellcheck` if installed), `version_test.sh` (the shared `tools/macos/lib/version.sh`
+helpers), `set_version_test.sh`, and `lua_test.lua` (the pure helpers in
+`UpdateCheck.lua`/`UpdateApply.lua`, exposed via a `_TEST` guard). The release
+workflow (`.github/workflows/macos-release.yml`) and the build workflow
+(`macos.yml`) both run `tools/macos/tests/run.sh` before building, so a release
+fails fast if any test fails.
+
+The upstream calculation and feature tests remain the authority for engine
+parity and run against the submodule:
 
 ```bash
 ( cd PathOfBuilding-PoE2 && docker-compose up )

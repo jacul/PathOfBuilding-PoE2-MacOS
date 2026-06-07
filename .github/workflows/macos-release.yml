@@ -31,8 +31,33 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.tag.outputs.tag }}
+          submodules: recursive
+      - name: Verify tag matches Info.plist version
+        run: |
+          set -eu
+          TAG="${{ steps.tag.outputs.tag }}"
+          t="${TAG#v}"
+          case "$t" in
+            *-macos.*) ;;
+            *) echo "Tag '$TAG' is not of the form v<engine>-macos.<build>." >&2; exit 1;;
+          esac
+          tag_engine="${t%-macos.*}"
+          tag_build="${t##*-macos.}"
+          case "$tag_build" in ''|*[!0-9]*) echo "Tag '$TAG' has a non-numeric build." >&2; exit 1;; esac
+          case "$tag_engine" in ''|*[!0-9.]*) echo "Tag '$TAG' has a bad engine version." >&2; exit 1;; esac
+          plist="macos/Info.plist.in"
+          short="$(awk '/CFBundleShortVersionString/{getline; gsub(/[^0-9.]/,"",$0); print $0; exit}' "$plist")"
+          cfv="$(awk '/<key>CFBundleVersion<\/key>/{getline; gsub(/[^0-9]/,"",$0); print $0; exit}' "$plist")"
+          if [ "$tag_engine" != "$short" ] || [ "$tag_build" != "$cfv" ]; then
+            echo "Tag $TAG disagrees with Info.plist (engine=$short build=$cfv)." >&2
+            echo "Run 'tools/macos/set_version.sh $tag_build' on the release commit and re-tag." >&2
+            exit 1
+          fi
+          echo "Tag $TAG matches Info.plist (engine $short, build $cfv)."
       - name: Install dependencies
         run: brew install cmake ninja sdl3 luajit curl zlib zstd
+      - name: Run macOS script tests
+        run: tools/macos/tests/run.sh
       - name: Build and package
         run: |
           tools/macos/build_app.sh

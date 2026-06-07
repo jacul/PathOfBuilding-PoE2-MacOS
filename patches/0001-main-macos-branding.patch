@@ -4,12 +4,12 @@
  local m_cos = math.cos
  local m_pi = math.pi
  
-+-- macOS port release counter, shown in the version labels. This increments for
-+-- port-specific releases (native host, packaging, bug fixes) that share the same
-+-- upstream engine version. Keep it in sync with CFBundleVersion in
-+-- macos/Info.plist.in (and it is mirrored into manifest.xml as the "macbuild"
-+-- attribute by package_app.sh, which the update check reads). See RELEASE.md.
-+local macPortBuild = 3
++-- macOS port build counter, shown in the version labels. The single source of
++-- truth is CFBundleVersion in macos/Info.plist.in; package_app.sh overwrites
++-- this line at package time (and mirrors the same number into manifest.xml as
++-- "macbuild", which the update check reads). The 0 below is only a dev-run
++-- placeholder. See RELEASE.md.
++local macPortBuild = 0
 +
  LoadModule("GameVersions")
  LoadModule("Modules/Common")

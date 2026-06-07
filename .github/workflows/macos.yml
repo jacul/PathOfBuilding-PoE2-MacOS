@@ -1,9 +1,9 @@
 name: macOS build
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
   workflow_dispatch:
 jobs:
   build_macos:
@@ -11,8 +11,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Install dependencies
         run: brew install cmake ninja sdl3 luajit curl zlib zstd
+      - name: Run macOS script tests
+        run: tools/macos/tests/run.sh
       - name: Build app
         run: tools/macos/build_app.sh
       - name: Package app
@@ -24,4 +28,3 @@ jobs:
           path: |
             dist/macos-arm64/PathOfBuilding-PoE2-macos-arm64.zip
             dist/macos-arm64/PathOfBuilding-PoE2-macos-arm64.zip.sha256
-

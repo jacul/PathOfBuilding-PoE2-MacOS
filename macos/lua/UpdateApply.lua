@@ -11,9 +11,54 @@
 -- script replace a running bundle, and it waits for us by bundle path (pgrep)
 -- rather than needing a PID.
 
+-- ===========================================================================
+-- Pure helpers. Also returned for unit tests via the _TEST guard; the drop-in
+-- run never sets _TEST.
+-- ===========================================================================
+
 local function shquote(s)
 	return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
 end
+
+-- Build the detached installer shell script. It waits for the running app
+-- (matched by bundle path) to quit, swaps the staged .app into place with a
+-- rollback backup, clears quarantine, relaunches, and cleans the cache.
+local function buildInstaller(appPath, stagedApp, stageRoot)
+	return table.concat({
+		"#!/bin/sh",
+		"trap '' HUP",
+		"APP=" .. shquote(appPath),
+		"STAGED=" .. shquote(stagedApp),
+		"STAGE_ROOT=" .. shquote(stageRoot),
+		'exec >"$STAGE_ROOT/installer.log" 2>&1',
+		-- Wait for this app to quit (max ~60s) so the bundle isn't in use.
+		"i=0",
+		'while pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1; do',
+		'\ti=$((i+1)); [ "$i" -ge 300 ] && break',
+		"\tsleep 0.2",
+		"done",
+		'[ -d "$STAGED" ] || { open "$APP"; exit 1; }',
+		'BAK="$STAGE_ROOT/previous.app"',
+		'rm -rf "$BAK"',
+		'if ! mv "$APP" "$BAK"; then open "$APP"; exit 1; fi',
+		'if ! /usr/bin/ditto "$STAGED" "$APP"; then rm -rf "$APP"; mv "$BAK" "$APP"; open "$APP"; exit 1; fi',
+		'/usr/bin/xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true',
+		'open "$APP"',
+		'rm -rf "$STAGE_ROOT"',
+		"",
+	}, "\n")
+end
+
+if _TEST then
+	return {
+		shquote = shquote,
+		buildInstaller = buildInstaller,
+	}
+end
+
+-- ===========================================================================
+-- Drop-in script (runs in the main Lua state via LoadModule).
+-- ===========================================================================
 
 local home = os.getenv("HOME") or "/tmp"
 local stageRoot = home .. "/Library/Caches/PathOfBuilding-PoE2-Update"
@@ -48,36 +93,12 @@ if appPath == scriptPath or not appPath:match("%.app$") then
 end
 
 local installerPath = stageDir .. "/installer.sh"
-local installer = table.concat({
-	"#!/bin/sh",
-	"trap '' HUP",
-	"APP=" .. shquote(appPath),
-	"STAGED=" .. shquote(stagedApp),
-	"STAGE_ROOT=" .. shquote(stageRoot),
-	'exec >"$STAGE_ROOT/installer.log" 2>&1',
-	-- Wait for this app to quit (max ~60s) so the bundle isn't in use.
-	"i=0",
-	'while pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1; do',
-	'\ti=$((i+1)); [ "$i" -ge 300 ] && break',
-	"\tsleep 0.2",
-	"done",
-	'[ -d "$STAGED" ] || { open "$APP"; exit 1; }',
-	'BAK="$STAGE_ROOT/previous.app"',
-	'rm -rf "$BAK"',
-	'if ! mv "$APP" "$BAK"; then open "$APP"; exit 1; fi',
-	'if ! /usr/bin/ditto "$STAGED" "$APP"; then rm -rf "$APP"; mv "$BAK" "$APP"; open "$APP"; exit 1; fi',
-	'/usr/bin/xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true',
-	'open "$APP"',
-	'rm -rf "$STAGE_ROOT"',
-	"",
-}, "\n")
-
 local file = io.open(installerPath, "w")
 if not file then
 	print("Couldn't write the installer script.")
 	return
 end
-file:write(installer)
+file:write(buildInstaller(appPath, stagedApp, stageRoot))
 file:close()
 
 print("Applying update " .. tag .. "...")

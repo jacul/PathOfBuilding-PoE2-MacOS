@@ -17,11 +17,77 @@
 --   globals:  GetScriptPath, GetRuntimePath, GetWorkDir, MakeDir
 --   sub-calls: ConPrintf, UpdateProgress
 --   returns:  "none" | "normal" | (nil, errMsg)
-local connectionProtocol, proxyURL, noSSL = ...
+
+-- ===========================================================================
+-- Pure helpers (no host globals / network / io). Also returned for unit tests
+-- via the _TEST guard below; the drop-in run never sets _TEST.
+-- ===========================================================================
 
 local repo = "jacul/PathOfBuilding-PoE2-MacOS"
 local zipName = "PathOfBuilding-PoE2-macos-arm64.zip"
 local appName = "Path of Building (PoE2).app"
+
+local function shquote(s)
+	return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
+end
+
+-- Read engine version, platform and macOS build counter out of a manifest's
+-- text with a simple pattern match (avoids requiring the xml module).
+local function parseManifestVersion(text)
+	local versionTag = tostring(text or ""):match("<Version%f[%s][^>]*/>")
+	if not versionTag then
+		return nil
+	end
+	local number = versionTag:match('number%s*=%s*"([^"]*)"')
+	local platform = versionTag:match('platform%s*=%s*"([^"]*)"')
+	local build = tonumber(versionTag:match('macbuild%s*=%s*"([^"]*)"'))
+	return number, platform, build
+end
+
+-- "0.19.0" -> { 0, 19, 0 } for component-wise comparison.
+local function parseVersionParts(str)
+	local parts = {}
+	for n in tostring(str or ""):gmatch("%d+") do
+		parts[#parts + 1] = tonumber(n)
+	end
+	return parts
+end
+
+-- True when (engineB, buildB) is strictly newer than (engineA, buildA).
+local function isNewer(engineA, buildA, engineB, buildB)
+	local a, b = parseVersionParts(engineA), parseVersionParts(engineB)
+	for i = 1, math.max(#a, #b) do
+		local av, bv = a[i] or 0, b[i] or 0
+		if bv ~= av then
+			return bv > av
+		end
+	end
+	return (buildB or 0) > (buildA or 0)
+end
+
+-- "v0.19.0-macos.4" -> "0.19.0", "4"  (or nil for an unrecognised tag).
+local function parseReleaseTag(tag)
+	return tostring(tag or ""):match("^v?([%d%.]+)%-macos%.(%d+)$")
+end
+
+if _TEST then
+	return {
+		repo = repo,
+		zipName = zipName,
+		appName = appName,
+		shquote = shquote,
+		parseManifestVersion = parseManifestVersion,
+		parseVersionParts = parseVersionParts,
+		isNewer = isNewer,
+		parseReleaseTag = parseReleaseTag,
+	}
+end
+
+-- ===========================================================================
+-- Drop-in script (runs as the update subscript).
+-- ===========================================================================
+
+local connectionProtocol, proxyURL, noSSL = ...
 
 local scriptPath = (GetScriptPath and GetScriptPath()) or "."
 local runtimePath = (GetRuntimePath and GetRuntimePath()) or "."
@@ -32,15 +98,10 @@ package.path = runtimePath .. "/lua/?.lua;" .. runtimePath .. "/lua/?/init.lua;"
 local curl = require("lcurl.safe")
 local dkjson = require("dkjson")
 
-local function shquote(s)
-	return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
-end
 local function run(cmd)
 	return os.execute(cmd) == 0
 end
 
--- Read the bundled manifest (engine version, platform, macOS build counter)
--- with a simple pattern match (avoids requiring the xml module).
 local function readLocalVersion()
 	local file = io.open(scriptPath .. "/manifest.xml", "r")
 	if not file then
@@ -48,33 +109,7 @@ local function readLocalVersion()
 	end
 	local text = file:read("*a")
 	file:close()
-	local versionTag = text:match("<Version%f[%s][^>]*/>")
-	if not versionTag then
-		return nil
-	end
-	local number = versionTag:match('number%s*=%s*"([^"]*)"')
-	local platform = versionTag:match('platform%s*=%s*"([^"]*)"')
-	local build = tonumber(versionTag:match('macbuild%s*=%s*"([^"]*)"'))
-	return number, platform, build
-end
-
--- Component-wise numeric version compare; falls back to the port build counter.
-local function parseParts(str)
-	local parts = {}
-	for n in tostring(str or ""):gmatch("%d+") do
-		parts[#parts + 1] = tonumber(n)
-	end
-	return parts
-end
-local function isNewer(engineA, buildA, engineB, buildB)
-	local a, b = parseParts(engineA), parseParts(engineB)
-	for i = 1, math.max(#a, #b) do
-		local av, bv = a[i] or 0, b[i] or 0
-		if bv ~= av then
-			return bv > av
-		end
-	end
-	return (buildB or 0) > (buildA or 0)
+	return parseManifestVersion(text)
 end
 
 local function httpDownload(url, outPath)
@@ -142,7 +177,7 @@ if not body then
 end
 local release = dkjson.decode(body)
 local tag = release and release.tag_name
-local remoteEngine, remoteBuild = tostring(tag or ""):match("^v?([%d%.]+)%-macos%.(%d+)$")
+local remoteEngine, remoteBuild = parseReleaseTag(tag)
 if not remoteEngine then
 	return nil, "Couldn't read the latest version from GitHub."
 end

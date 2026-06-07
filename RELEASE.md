@@ -105,50 +105,63 @@ This port keeps the **upstream Path of Building engine version** as its base and
 adds a port-specific build counter, so it is always clear which upstream engine
 is bundled. Do **not** invent an independent version (e.g. `1.0.0`).
 
-- **Engine version** = upstream's version (currently `0.16.0`). This is the value
-  in `manifest.xml` (`<Version number="..."/>`) and in `CFBundleShortVersionString`
-  (`macos/Info.plist.in`). Only changes when you rebase onto a new upstream release.
-- **Port build counter** = a number you own, for macOS-host / packaging / bug-fix
-  releases that share the same engine version. It lives in two hand-edited places
-  that must stay in sync:
-  - `CFBundleVersion` in `macos/Info.plist.in` (macOS requires this to increase), and
-  - `macPortBuild` in `patches/0001-main-macos-branding.patch` (drives the in-app
-    version display).
-  `package_app.sh` also mirrors `CFBundleVersion` into the shipped `manifest.xml`
-  as a `macbuild` attribute, which the in-app update check compares against the
-  latest GitHub release — so the release **tag must match** these (e.g.
-  `v0.19.0-macos.3` ⇒ `CFBundleVersion`/`macPortBuild` = `3`).
-- **Release tags** combine the two: `v0.16.0-macos.1`, `v0.16.0-macos.2`, …
-  After a rebase onto upstream `0.17.0`, reset the counter: `v0.17.0-macos.1`.
-- The app shows both, e.g. `Version: 0.16.0 — macOS port build 1`.
+The version has a **single source of truth** — `macos/Info.plist.in` — and you
+set it with one command:
+
+```bash
+tools/macos/set_version.sh <build>     # e.g. set_version.sh 4
+```
+
+That writes both `CFBundleShortVersionString` (the engine version, read
+automatically from the pinned submodule's `manifest.xml`) and `CFBundleVersion`
+(the build number you pass). Everything else is **derived** from these at package
+time, so there is nothing else to hand-edit:
+
+- **Engine version** = the pinned submodule's `<Version number="…"/>`. Only
+  changes when you rebase onto a new upstream release; `set_version.sh` copies it
+  into `CFBundleShortVersionString`, and `package_app.sh` fails the build if the
+  two ever drift.
+- **Port build counter** = `CFBundleVersion`. `package_app.sh` derives the in-app
+  `macPortBuild` label and the manifest `macbuild` attribute (used by the update
+  check) from it — the branding patch only ships a `0` placeholder.
+- **Release tag** = `v<engine>-macos.<build>` (printed by `set_version.sh`). The
+  release workflow refuses to publish if the tag disagrees with `Info.plist`.
+- The app shows both, e.g. `PoB 0.19.0` above `macOS port build 1`.
+
+After a rebase onto a new engine (e.g. `0.20.0`), reset the counter:
+`set_version.sh 1` ⇒ tag `v0.20.0-macos.1`.
 
 Prerequisites (via Homebrew): `cmake ninja sdl3 luajit curl zlib zstd`.
 
-### Automated release (recommended)
+### Branching (git-flow lite)
 
-Pushing a version tag matching `v*-macos.*` triggers the **macOS release**
-workflow (`.github/workflows/macos-release.yml`), which builds and packages the
-app on an Apple Silicon runner and publishes the `.zip` + `.zip.sha256` to a new
-GitHub Release with install/verify notes:
+- `develop` — default branch; all work lands here.
+- `main` — production; each release lands here and is tagged.
+- Feature work can branch off `develop` as `feature/<name>` and merge back.
+
+### Release flow (recommended)
+
+Pushing a tag matching `v*-macos.*` triggers the **macOS release** workflow
+(`.github/workflows/macos-release.yml`), which verifies the tag matches
+`Info.plist`, builds + packages on an Apple Silicon runner, and publishes the
+`.zip` + `.zip.sha256` to a new GitHub Release with install/verify notes.
 
 ```bash
-# after bumping the version fields below and merging to main:
-git tag v0.16.0-macos.1
-git push origin v0.16.0-macos.1
+git switch develop                       # features already merged
+tools/macos/set_version.sh 4             # bump build (engine comes from submodule)
+git commit -am "Release v0.19.0-macos.4"
+git switch main && git merge --ff-only develop
+git tag v0.19.0-macos.4
+git push origin main v0.19.0-macos.4     # CI verifies, builds, and publishes
+git switch develop                       # keep working
 ```
 
-You can also run it manually from the Actions tab against an existing tag. The
-manual steps below remain available if you prefer to build/upload locally.
+You can also run the workflow from the Actions tab against an existing tag.
 
-Steps (manual):
-1. Set the versions:
-   - **Engine version** (only when rebasing onto new upstream): `manifest.xml`
-     (`<Version number="..."/>`) and `CFBundleShortVersionString` in
-     `macos/Info.plist.in`.
-   - **Port build counter** (every port release): bump `CFBundleVersion` in
-     `macos/Info.plist.in` **and** `macPortBuild` in
-     `patches/0001-main-macos-branding.patch`. (`package_app.sh` copies
-     `CFBundleVersion` into the manifest's `macbuild` for the update check.)
+### Manual build (optional, local)
+
+1. Set the version: `tools/macos/set_version.sh <build>` (see **Versioning**
+   above — it sets both Info.plist fields from the submodule engine + your build).
 2. Build and package:
 
        tools/macos/package_app.sh
