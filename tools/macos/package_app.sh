@@ -43,6 +43,17 @@ for patch in "${repo_root}"/patches/*.patch; do
 done
 shopt -u nullglob
 
+# Replace the Windows updater scripts with this port's macOS versions. These are
+# whole-file overrides, not patches: upstream's launch:CheckForUpdate runs
+# UpdateCheck.lua and launch:ApplyUpdate runs UpdateApply.lua *by name*, so
+# swapping the files redirects the in-app updater to a GitHub-release check plus
+# an in-place .app swap without patching Launch.lua/Main.lua. The stock update
+# toast, "Update Ready" button and startup auto-check are reused unchanged.
+# See docs/macos.md.
+for lua in UpdateCheck UpdateApply; do
+  cp "${repo_root}/macos/lua/${lua}.lua" "${resources}/src/${lua}.lua"
+done
+
 mkdir -p "${resources}/runtime/SimpleGraphic"
 rsync -a "${app_dir}/runtime/SimpleGraphic/" "${resources}/runtime/SimpleGraphic/"
 rsync -a "${app_dir}/runtime/lua/" "${resources}/runtime/lua/"
@@ -50,16 +61,24 @@ rsync -a "${app_dir}/runtime/lua/" "${resources}/runtime/lua/"
 # platform so the app does not fall into "developer mode" (which shows the
 # Developer Mode warning and stores user data inside the app bundle). With a
 # platform set, user data is stored under ~/Library/Application Support.
-python3 - "${app_dir}/manifest.xml" "${resources}/manifest.xml" <<'PY'
+# Also mirror the port build counter (CFBundleVersion) into the manifest as
+# "macbuild" so the macOS UpdateCheck.lua can compare it against GitHub releases.
+mac_build="$(awk '/<key>CFBundleVersion<\/key>/{getline; gsub(/[^0-9]/,"",$0); print $0; exit}' "${repo_root}/macos/Info.plist.in")"
+python3 - "${app_dir}/manifest.xml" "${resources}/manifest.xml" "${mac_build}" <<'PY'
 import re, sys
-src, dst = sys.argv[1], sys.argv[2]
+src, dst, macbuild = sys.argv[1], sys.argv[2], sys.argv[3]
 text = open(src, "r", encoding="utf-8").read()
-def add_platform(match):
-    tag = match.group(0)
-    if "platform=" in tag:
-        return tag
-    return tag[:-2] + ' platform="macos-arm64" />'
-text = re.sub(r'<Version\b[^>]*/>', add_platform, text, count=1)
+def add_attrs(match):
+    tag = match.group(0).rstrip()
+    if not tag.endswith("/>"):
+        return match.group(0)
+    inner = tag[:-2].rstrip()
+    if "platform=" not in inner:
+        inner += ' platform="macos-arm64"'
+    if "macbuild=" not in inner and macbuild:
+        inner += ' macbuild="%s"' % macbuild
+    return inner + ' />'
+text = re.sub(r'<Version\b[^>]*/>', add_attrs, text, count=1)
 open(dst, "w", encoding="utf-8").write(text)
 PY
 cp "${app_dir}/changelog.txt" "${resources}/changelog.txt"

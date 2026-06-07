@@ -11,18 +11,19 @@ This repository contains only the macOS-specific pieces; the Path of Building
 application is consumed pristine from upstream:
 
 - `macos/` — the native host (SDL3 + LuaJIT + bitmap-font/DDS renderer).
+  - `macos/lua/` — whole-file Lua **overrides** copied over the bundled copy at
+    package time (not diffs): `UpdateCheck.lua` and `UpdateApply.lua`. Upstream's
+    `launch:CheckForUpdate` runs `UpdateCheck.lua` and `launch:ApplyUpdate` runs
+    `UpdateApply.lua` *by name*, so replacing those two files redirects the
+    in-app updater to a GitHub-release check + an in-place `.app` swap **without
+    patching** `Launch.lua`/`Main.lua`. The stock update toast, "Update Ready"
+    button and startup/periodic auto-check are reused unchanged.
 - `tools/macos/` — build/package scripts.
-- `patches/` — the only macOS-specific Lua deltas, applied to the **bundled**
+- `patches/` — the only macOS-specific Lua **diffs**, applied to the **bundled**
   copy at package time (the submodule is never modified):
-  - `0001-launch-disable-macos-updater.patch` — disables the in-app updater
-    (there is no Windows `Update.exe` on macOS).
-  - `0002-main-macos-ui-and-branding.patch` — macOS UI tweaks + this port's
-    GitHub/About links.
-  - `0003-macos-self-update.patch` — makes the **Check for Update** button read
-    this port's latest GitHub Release tag, compare it to the running build, and,
-    when a newer build exists, offer to download it, verify it against the
-    published SHA-256, and swap the `.app` in place (with **Open Page** as a
-    manual fallback).
+  - `0001-main-macos-branding.patch` — cosmetic only: the About/GitHub links,
+    the version labels, and the `macPortBuild` counter shown in-app. The updater
+    is **not** patched — it is handled by the `macos/lua/` overrides above.
 - `PathOfBuilding-PoE2/` — the upstream
   [PathOfBuildingCommunity/PathOfBuilding-PoE2](https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2)
   repository as a **git submodule, pinned to a specific engine release commit**.
@@ -70,8 +71,10 @@ tools/macos/package_app.sh
 ```
 
 This builds the host, rsyncs the submodule's `src/` into the app bundle, applies
-`patches/*` to that bundled copy (the submodule stays pristine), tags the
-manifest with `platform="macos-arm64"`, and produces
+`patches/*` to that bundled copy, copies the `macos/lua/` updater overrides over
+the bundled `UpdateCheck.lua`/`UpdateApply.lua` (the submodule stays pristine),
+tags the manifest with `platform="macos-arm64"` and the port build counter
+(`macbuild`), and produces
 `dist/macos-arm64/PathOfBuilding-PoE2-macos-arm64.zip` (plus a `.sha256`). It
 also refreshes `runtime-macos-arm64/`. If a patch no longer applies after an
 engine bump, packaging fails loudly — that is the signal to re-roll it.
@@ -123,24 +126,28 @@ Before release, verify the native host manually:
 - The packaged manifest tags the `<Version>` element with
   `platform="macos-arm64"`, so the app runs as a normal release rather than in
   developer mode.
-- The Windows file-by-file auto-updater is disabled on macOS (the Windows
-  `Update.exe` runtime is not shipped and the app ships as a whole `.app`). In
-  its place, the **Check for Update** button queries this port's latest GitHub
-  Release tag (`releases/latest`) and tells you whether you are up to date. When
-  a newer build exists it offers **Download & Install**, which:
-  1. downloads the release zip + its `.sha256` to a temp folder (on a background
-     subscript, so the UI keeps responding),
-  2. verifies the zip against the published SHA-256 (`shasum -a 256 -c`) and
-     extracts the new `.app` with `ditto`,
-  3. writes a small detached helper script and quits; the helper waits for the
-     app to exit, swaps the `.app` in place (keeping a `previous.app` backup
-     until the copy succeeds), clears the download quarantine, and relaunches.
-
-  No native `Update.exe`-style helper is needed: macOS lets the detached `/bin/sh`
-  script replace the bundle, and it waits on the running app by bundle path
-  (`pgrep -f`) rather than needing a PID. **Open Page** remains as a manual
-  fallback, and dev runs from a source checkout (no `.app` to swap) only offer
-  the page.
+- The Windows file-by-file updater is **replaced**, not removed, by the
+  `macos/lua/UpdateCheck.lua` and `UpdateApply.lua` overrides (no `Update.exe`).
+  Because upstream runs those files by name, the in-app updater behaves exactly
+  like the Windows build — same toast, same green **"Update Ready"** button, same
+  startup/periodic auto-check — but the underlying actions are macOS-native:
+  - **Check** (`UpdateCheck.lua`, run as the usual subscript): reads the latest
+    GitHub release (`releases/latest`), compares the engine version + `macbuild`
+    from the manifest, and — like upstream, which downloads during the check —
+    when newer downloads the release zip + `.sha256`, verifies it
+    (`shasum -a 256 -c`), and extracts the new `.app` into
+    `~/Library/Caches/PathOfBuilding-PoE2-Update/<tag>/` (cached, so a re-check
+    doesn't re-download). Progress shows in the button (`Downloading…` /
+    `Verifying…` / `Extracting…`); it returns `"normal"`, so the stock toast and
+    "Update Ready" button appear. An unreachable network is treated as "no
+    update" so the silent startup check never nags.
+  - **Apply** (`UpdateApply.lua`, run in the main state via `LoadModule`): writes
+    a small detached `/bin/sh` helper and quits. The helper waits for the app to
+    exit (by bundle path via `pgrep -f`, so no PID is needed), swaps the staged
+    `.app` in place (keeping a `previous.app` backup until the copy succeeds),
+    clears the download quarantine, relaunches, and cleans up the cache. macOS
+    lets a detached script replace a running bundle, so no native `Update.exe`
+    equivalent is required.
 
 ## Release Notes
 

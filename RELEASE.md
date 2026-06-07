@@ -109,11 +109,15 @@ is bundled. Do **not** invent an independent version (e.g. `1.0.0`).
   in `manifest.xml` (`<Version number="..."/>`) and in `CFBundleShortVersionString`
   (`macos/Info.plist.in`). Only changes when you rebase onto a new upstream release.
 - **Port build counter** = a number you own, for macOS-host / packaging / bug-fix
-  releases that share the same engine version. It lives in two places that must
-  stay in sync:
+  releases that share the same engine version. It lives in two hand-edited places
+  that must stay in sync:
   - `CFBundleVersion` in `macos/Info.plist.in` (macOS requires this to increase), and
-  - `macPortBuild` near the top of `src/Modules/Main.lua` (drives the in-app
+  - `macPortBuild` in `patches/0001-main-macos-branding.patch` (drives the in-app
     version display).
+  `package_app.sh` also mirrors `CFBundleVersion` into the shipped `manifest.xml`
+  as a `macbuild` attribute, which the in-app update check compares against the
+  latest GitHub release — so the release **tag must match** these (e.g.
+  `v0.19.0-macos.3` ⇒ `CFBundleVersion`/`macPortBuild` = `3`).
 - **Release tags** combine the two: `v0.16.0-macos.1`, `v0.16.0-macos.2`, …
   After a rebase onto upstream `0.17.0`, reset the counter: `v0.17.0-macos.1`.
 - The app shows both, e.g. `Version: 0.16.0 — macOS port build 1`.
@@ -142,7 +146,9 @@ Steps (manual):
      (`<Version number="..."/>`) and `CFBundleShortVersionString` in
      `macos/Info.plist.in`.
    - **Port build counter** (every port release): bump `CFBundleVersion` in
-     `macos/Info.plist.in` **and** `macPortBuild` in `src/Modules/Main.lua`.
+     `macos/Info.plist.in` **and** `macPortBuild` in
+     `patches/0001-main-macos-branding.patch`. (`package_app.sh` copies
+     `CFBundleVersion` into the manifest's `macbuild` for the update check.)
 2. Build and package:
 
        tools/macos/package_app.sh
@@ -158,9 +164,10 @@ Steps (manual):
    `SECURITY.md` tells users to verify the download against this checksum, so it
    must be attached to every release.
 5. The macOS build has no file-by-file updater; ship the `.zip` for users to
-   download. The in-app **Check for Update** button reads this port's
-   `releases/latest` tag (e.g. `v0.19.0-macos.2`) to detect newer builds and can
-   then download, verify, and install the new `.app` in place. For that to work:
+   download. The bundled `UpdateCheck.lua` override reads this port's
+   `releases/latest` tag (e.g. `v0.19.0-macos.2`) to detect newer builds, surfaces
+   them through the normal update toast + "Update Ready" button, and on apply
+   downloads, verifies, and swaps in the new `.app`. For that to work:
    - the release **tag must follow the `v<engine>-macos.<build>` scheme**, and
      the GitHub Release must be **published** (not a draft);
    - both `PathOfBuilding-PoE2-macos-arm64.zip` **and** its

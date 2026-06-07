@@ -1,42 +1,20 @@
 --- a/src/Modules/Main.lua
 +++ b/src/Modules/Main.lua
-@@ -14,6 +14,12 @@
+@@ -14,6 +14,13 @@
  local m_cos = math.cos
  local m_pi = math.pi
  
-+-- macOS port release counter. This increments for port-specific releases
-+-- (native host, packaging, bug fixes) that share the same upstream engine
-+-- version (launch.versionNumber). When bumping, also update CFBundleVersion in
-+-- macos/Info.plist.in. See RELEASE.md ("Versioning").
++-- macOS port release counter, shown in the version labels. This increments for
++-- port-specific releases (native host, packaging, bug fixes) that share the same
++-- upstream engine version. Keep it in sync with CFBundleVersion in
++-- macos/Info.plist.in (and it is mirrored into manifest.xml as the "macbuild"
++-- attribute by package_app.sh, which the update check reads). See RELEASE.md.
 +local macPortBuild = 3
 +
  LoadModule("GameVersions")
  LoadModule("Modules/Common")
  LoadModule("Modules/CalcFormat")
-@@ -211,12 +217,21 @@
- 		return launch.updateAvailable and launch.updateAvailable ~= "none"
- 	end
- 	self.controls.checkUpdate = new("ButtonControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {0, -24, 140, 20}, "", function()
--		launch:CheckForUpdate()
-+		if launch.versionPlatform == "macos-arm64" then
-+			-- The native macOS build has no in-app updater, so send the user to
-+			-- this port's Releases page to download the latest version.
-+			OpenURL("https://github.com/jacul/PathOfBuilding-PoE2-MacOS/releases/latest")
-+		else
-+			launch:CheckForUpdate()
-+		end
- 	end)
- 	self.controls.checkUpdate.shown = function()
- 		return not launch.devMode and (not launch.updateAvailable or launch.updateAvailable == "none")
- 	end
- 	self.controls.checkUpdate.label = function()
-+		if launch.versionPlatform == "macos-arm64" then
-+			return "Check for Update"
-+		end
- 		return launch.updateCheckRunning and launch.updateProgress or "Check for Update"
- 	end
- 	self.controls.checkUpdate.enabled = function()
-@@ -224,11 +239,11 @@
+@@ -224,11 +231,11 @@
  	end
  	self.controls.forkLabel = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {148, -26, 0, 16}, "")
  	self.controls.forkLabel.label = function()
@@ -50,7 +28,7 @@
  	end
  	self.controls.devMode = new("LabelControl", {"BOTTOMLEFT",self.anchorMain,"BOTTOMLEFT"}, {0, -26, 0, 20}, colorCodes.NEGATIVE.."Dev Mode")
  	self.controls.devMode.shown = function()
-@@ -1439,10 +1454,10 @@
+@@ -1439,10 +1446,10 @@
  	controls.close = new("ButtonControl", {"TOPRIGHT",nil,"TOPRIGHT"}, {-10, 10, 50, 20}, "Close", function()
  		self:ClosePopup()
  	end)

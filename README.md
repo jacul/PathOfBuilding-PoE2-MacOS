@@ -1,8 +1,6 @@
 # Path of Building (PoE2) — Native macOS Port
 ## An offline build planner for Path of Exile 2, running natively on Apple Silicon macOS.
 
-> **Side project notice:** This is a personal side project. It may contain bugs and is not officially supported. I use this app actively and will keep it updated as best I can. Feedback, bug reports, and contributions are very welcome — thank you!
-
 This is a **native macOS (Apple Silicon) port** of [Path of Building Community for Path of Exile 2](https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2).
 
 It keeps the original Lua application and the entire calculation engine **unchanged** — every offence/defence calculation, the passive tree, items, skills and import/export logic are identical to the upstream project. Only the Windows-only SimpleGraphic runtime has been replaced with a native macOS host (SDL3 + LuaJIT + a bitmap font/DDS renderer) — originally created by [stevep51](https://github.com/stevep51/PathOfBuilding-PoE2-MacOS) — so it runs as a real `.app` instead of through Wine/CrossOver or the Windows `.exe`. See [Credits](#credits).
@@ -61,7 +59,7 @@ The calculation engine, data, passive tree, skills, items and UI logic are **unc
 - **Native macOS host** (`macos/`) replaces the Windows-only SimpleGraphic runtime: a Cocoa + SDL3 window with layer-correct draw ordering, a bitmap font renderer, DDS/TGA texture decoders, libcurl-backed HTTPS downloads, a loopback OAuth sign-in server, and background sub-scripts. The app loads its bundled Lua from inside the `.app` (`Contents/Resources`), falling back to the source tree when run from a checkout.
 - **macOS-native conventions:** keyboard shortcuts use `Cmd` (e.g. `Cmd`+1–7 to switch tabs, `Cmd`+S to save, `` Cmd+` `` for the console), and user data is stored under `~/Library/Application Support/Path of Building (PoE2)/` instead of the Windows path.
 - **Windows runtime removed:** the `.exe`/`.dll` binaries are not shipped. Only the shared Lua sources, fonts (`runtime/SimpleGraphic/Fonts`) and Lua libraries (`runtime/lua`) are retained.
-- **Updates:** there's no file-by-file auto-updater on macOS (the app ships as a whole `.app`), but the **Check for Update** button does the next best thing: it queries this port's latest [GitHub Release](https://github.com/jacul/PathOfBuilding-PoE2-MacOS/releases), tells you whether you're on the newest build, and when a newer one exists offers **Download & Install** — it downloads the release, **verifies it against the published SHA-256**, swaps the app in place, and restarts (with **Open Page** as a manual fallback). See [SECURITY.md](SECURITY.md) for how the checksum verification works. The **About** dialog links to this repository.
+- **Updates:** the in-app updater works just like the Windows build — the same update toast and green **"Update Ready"** button, checked on startup, periodically, and via **Check for Update** — but it tracks this port's [GitHub Releases](https://github.com/jacul/PathOfBuilding-PoE2-MacOS/releases) (the app ships as a whole `.app`, so there's no Windows-style file updater). When a newer build is found it downloads it, **verifies it against the published SHA-256**, swaps the app in place, and restarts. See [SECURITY.md](SECURITY.md) for how the checksum verification works. The **About** dialog links to this repository.
 - **Versioning:** releases keep the upstream engine version and add a macOS build counter (e.g. tag `v0.16.0-macos.1`), shown in-app as `Version: 0.16.0` above `macOS Port (build 1)`. See [RELEASE.md](RELEASE.md) for the scheme.
 
 ## Changelog
@@ -72,7 +70,7 @@ This distribution stands on the work of others:
 
 - **[Path of Building Community](https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2)** — created and maintain Path of Building and the Path of Exile 2 fork. All calculation logic, data, the passive tree, items, skills and UI are theirs.
 - **[stevep51](https://github.com/stevep51/PathOfBuilding-PoE2-MacOS)** — created the native macOS host (SDL3 + LuaJIT + bitmap-font/DDS renderer) that replaces the Windows-only SimpleGraphic runtime. This port is built directly on that work, which did the heavy lifting of the engine port.
-- This repository ([jacul/PathOfBuilding-PoE2-MacOS](https://github.com/jacul/PathOfBuilding-PoE2-MacOS)) packages the above — tracking the latest upstream Path of Building engine version and adding macOS host fixes (e.g. DDS texture-array / non-square sheet support for the passive tree).
+- This repository ([jacul/PathOfBuilding-PoE2-MacOS](https://github.com/jacul/PathOfBuilding-PoE2-MacOS)) packages the above — tracking the latest upstream Path of Building engine version, adding macOS host fixes (e.g. DDS texture-array / non-square sheet support for the passive tree), and adding a macOS-specific in-app updater (a native GitHub-release check that downloads, verifies, and swaps the `.app` in place, reusing the app's normal update toast and "Update Ready" button).
 
 ## Licence
 [MIT](https://opensource.org/licenses/MIT)
