@@ -1,7 +1,9 @@
 name: macOS build
 on:
+  # main only advances during a release (fast-forward from develop), which the
+  # tag-triggered macOS release workflow already builds — so don't build it here.
   push:
-    branches: [ main, develop ]
+    branches: [ develop ]
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:
