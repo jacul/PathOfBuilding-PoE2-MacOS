@@ -8,7 +8,30 @@ on:
     branches: [ main, develop ]
   workflow_dispatch:
 jobs:
+  # A release fast-forwards develop and pushes the v*-macos.* tag at the same
+  # commit. That commit is already built by the tag-triggered release workflow,
+  # so skip the develop-push build for it — otherwise a release runs two
+  # identical builds (this one + the release). Normal develop pushes and PRs are
+  # never release-tagged, so they build as usual. This tiny gate runs in seconds.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tagged: ${{ steps.check.outputs.release_tagged }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need tags to see if HEAD is a release commit
+      - id: check
+        run: |
+          if git tag --points-at HEAD | grep -qE '^v[0-9].*-macos\.[0-9]+$'; then
+            echo "release_tagged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_tagged=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build_macos:
+    needs: gate
+    if: needs.gate.outputs.release_tagged != 'true'
     runs-on: macos-14
     steps:
       - name: Checkout

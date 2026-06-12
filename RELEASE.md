@@ -152,14 +152,28 @@ Pushing a tag matching `v*-macos.*` triggers the **macOS release** workflow
 `.zip` + `.zip.sha256` to a new GitHub Release with install/verify notes.
 
 ```bash
-git switch develop                       # features already merged
-tools/macos/set_version.sh 4             # bump build (engine comes from submodule)
-git commit -am "Release v0.19.0-macos.4"
-git switch main && git merge --ff-only develop
-git tag v0.19.0-macos.4
-git push origin main v0.19.0-macos.4     # CI verifies, builds, and publishes
-git switch develop                       # keep working
+git checkout develop                     # features already merged
+tools/macos/set_version.sh 5             # bump build (engine comes from submodule)
+git commit -am "Release v0.20.0-macos.5" # this is the commit you tag
+git checkout main && git merge --ff-only develop
+git tag v0.20.0-macos.5
+# Push all three refs in ONE command, tag included, so only the release builds:
+git push origin main develop v0.20.0-macos.5
+git checkout develop                     # keep working
 ```
+
+Push `main`, `develop`, and the tag **together** (one `git push`). A release
+fast-forwards all three to the same commit, so:
+
+- `main` push → no build (`macos.yml` doesn't watch `main`).
+- `develop` push → the `macos.yml` `gate` job sees the `v*-macos.*` tag on the
+  commit and **skips** the build (the release workflow already builds it). This
+  only works if the tag lands in the same push, hence "all three together".
+- tag push → the **macOS release** workflow builds + publishes.
+
+Net: one build per release. (If you push `develop` *before* the tag, the gate
+won't see the tag yet and you'll get a redundant develop build — push the tag
+in the same command.)
 
 You can also run the workflow from the Actions tab against an existing tag.
 
