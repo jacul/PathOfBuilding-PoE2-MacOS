@@ -152,14 +152,14 @@ Pushing a tag matching `v*-macos.*` triggers the **macOS release** workflow
 `.zip` + `.zip.sha256` to a new GitHub Release with install/verify notes.
 
 ```bash
-git checkout develop                     # features already merged
+git switch develop                       # features already merged
 tools/macos/set_version.sh 5             # bump build (engine comes from submodule)
 git commit -am "Release v0.20.0-macos.5" # this is the commit you tag
-git checkout main && git merge --ff-only develop
+git switch main && git merge --ff-only develop
 git tag v0.20.0-macos.5
 # Push all three refs in ONE command, tag included, so only the release builds:
 git push origin main develop v0.20.0-macos.5
-git checkout develop                     # keep working
+git switch develop                       # keep working
 ```
 
 Push `main`, `develop`, and the tag **together** (one `git push`). A release
