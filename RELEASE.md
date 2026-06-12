@@ -128,8 +128,13 @@ time, so there is nothing else to hand-edit:
   release workflow refuses to publish if the tag disagrees with `Info.plist`.
 - The app shows both, e.g. `PoB 0.19.0` above `macOS port build 1`.
 
-After a rebase onto a new engine (e.g. `0.20.0`), reset the counter:
-`set_version.sh 1` ⇒ tag `v0.20.0-macos.1`.
+The build counter increments **globally** — it never resets on an engine bump.
+After rebasing onto a new engine, bump it by one (e.g. if the last release was
+`v0.19.0-macos.4`, the first `0.20.0` release is `set_version.sh 5` ⇒ tag
+`v0.20.0-macos.5`). The engine version and the counter are shown on separate
+lines in the app, so the counter just identifies the port build monotonically
+across all engines. (The updater compares `(engine, build)` with engine first,
+so a reset would also work, but we keep it monotonic for clarity.)
 
 Prerequisites (via Homebrew): `cmake ninja sdl3 luajit curl zlib zstd`.
 
