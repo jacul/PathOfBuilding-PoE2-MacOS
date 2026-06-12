@@ -90,12 +90,30 @@ rsync -a "${app_dir}/runtime/lua/" "${resources}/runtime/lua/"
 # Also mirror the port build counter (CFBundleVersion, read above) into the
 # manifest as "macbuild" so the macOS UpdateCheck.lua can compare it against
 # GitHub releases.
-version_write_manifest "${app_dir}/manifest.xml" "${resources}/manifest.xml" "${mac_build}"
-cp "${app_dir}/changelog.txt" "${resources}/changelog.txt"
-cp "${app_dir}/help.txt" "${resources}/help.txt"
+#
+# These three are read at runtime relative to the script working directory,
+# which the host sets to <Resources>/src (= GetScriptPath()): Launch.lua reads
+# "manifest.xml", UpdateCheck.lua reads GetScriptPath().."/manifest.xml", and
+# Main.lua's About popup reads "changelog.txt"/"help.txt". So they must live in
+# src/, not one level up in Resources/, or those reads silently find nothing
+# (e.g. a blank "Version history").
+version_write_manifest "${app_dir}/manifest.xml" "${resources}/src/manifest.xml" "${mac_build}"
+cp "${app_dir}/changelog.txt" "${resources}/src/changelog.txt"
+cp "${app_dir}/help.txt" "${resources}/src/help.txt"
 # Ship this port's LICENSE (carries the macOS-port + upstream credits), not the
 # submodule's upstream-only copy.
 cp "${repo_root}/LICENSE.md" "${resources}/LICENSE.md"
+
+# Guard the runtime-read layout: these files are opened relative to the script
+# working directory (<Resources>/src). If a refactor ever drops them one level
+# up in Resources/ again, the reads silently no-op (blank "Version history",
+# update check can't read the local version) — so fail the build loudly here.
+for f in manifest.xml changelog.txt help.txt; do
+  if [[ ! -f "${resources}/src/${f}" ]]; then
+    echo "error: ${f} missing from <Resources>/src — runtime reads it there (GetScriptPath); see package_app.sh." >&2
+    exit 1
+  fi
+done
 
 mkdir -p "${runtime_dir}"
 rm -rf "${runtime_dir}/Path of Building (PoE2).app"
