@@ -84,16 +84,67 @@ engine bump, packaging fails loudly — that is the signal to re-roll it.
 
 ## Updating to a new upstream engine release
 
-```bash
-git -C PathOfBuilding-PoE2 fetch
-git -C PathOfBuilding-PoE2 checkout <new-release-commit>
-git add PathOfBuilding-PoE2 && git commit -m "Bump app to <version>"
-tools/macos/package_app.sh   # re-roll patches/ if any fail to apply
-```
+The engine is a pinned submodule, so "pulling the latest upstream" means moving
+that pin to the new upstream release **tag** and re-deriving the port version
+from it. Work on `develop`.
 
-The native host (`macos/`) only needs changes when the engine starts using a
-**new host API** (compare `PathOfBuilding-PoE2/src/HeadlessWrapper.lua` and the
-globals registered in `macos/src/Host.mm`).
+1. **Fetch upstream tags and see what's new** (the submodule's `origin` is
+   PathOfBuildingCommunity):
+
+   ```bash
+   git -C PathOfBuilding-PoE2 fetch --tags origin
+   git -C PathOfBuilding-PoE2 describe --tags            # current pin
+   git -C PathOfBuilding-PoE2 tag --sort=-creatordate | head   # newest tags
+   ```
+
+2. **Move the pin to the new release tag** (use the `vX.Y.Z` tag, not `dev`/a
+   raw commit, so the bundled `manifest.xml` carries a real release version):
+
+   ```bash
+   git -C PathOfBuilding-PoE2 checkout vX.Y.Z
+   ```
+
+3. **Pre-flight the port overlay against the new engine** (both are non-mutating
+   — they catch breakage before you commit):
+
+   ```bash
+   # Does the cosmetic branding patch still apply?
+   patch -p1 --forward --dry-run --directory PathOfBuilding-PoE2 \
+     < patches/0001-main-macos-branding.patch
+   # Did the host API surface change? (empty diff = no macos/ host work needed)
+   git -C PathOfBuilding-PoE2 diff --stat <old-tag> vX.Y.Z -- src/HeadlessWrapper.lua
+   ```
+
+   If the patch no longer applies, re-roll `patches/0001-main-macos-branding.patch`
+   against the new `src/Modules/Main.lua`. If `HeadlessWrapper.lua` changed, the
+   native host (`macos/`) may need a new global — compare it to the globals
+   registered in `macos/src/Host.mm`.
+
+4. **Set the port version.** The engine version is read automatically from the
+   submodule's `manifest.xml`; you only hand it the **build counter**, which
+   increments **globally** and never resets on an engine bump (see *Versioning*
+   in `RELEASE.md`). If the last release was `…-macos.5`, pass `6`:
+
+   ```bash
+   tools/macos/set_version.sh 6     # prints the resulting vX.Y.Z-macos.6 tag
+   ```
+
+5. **Test, package, and verify** (packaging fails loudly if a patch no longer
+   applies or a runtime-read data file is misplaced):
+
+   ```bash
+   tools/macos/tests/run.sh
+   tools/macos/package_app.sh
+   open "dist/macos-arm64/Path of Building (PoE2).app"   # smoke-test the build
+   ```
+
+6. **Commit the pin + version together.** This is the commit you tag for the
+   release (see *Release flow* in `RELEASE.md`):
+
+   ```bash
+   git add PathOfBuilding-PoE2 macos/Info.plist.in
+   git commit -m "Bump engine to vX.Y.Z (macOS port build 6)"
+   ```
 
 ## Tests
 
