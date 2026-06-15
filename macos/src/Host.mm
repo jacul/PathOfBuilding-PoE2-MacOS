@@ -1769,6 +1769,15 @@ int Host::l_SetWindowTitle(lua_State* L) {
 int Host::l_RenderInit(lua_State*) {
     if (!current->window) {
         current->window = SDL_CreateWindow("Path of Building (PoE2)", 1600, 900, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        // Restore the last window size and position. AppKit persists the frame
+        // in NSUserDefaults and re-clamps off-screen/oversized frames on
+        // restore. On first launch there is no saved frame, so the 1600x900
+        // default above is kept.
+        if (NSWindow* nsWindow = (__bridge NSWindow*)SDL_GetPointerProperty(
+                SDL_GetWindowProperties(current->window),
+                SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr)) {
+            [nsWindow setFrameAutosaveName:@"PoB2MainWindow"];
+        }
         current->renderer = SDL_CreateRenderer(current->window, nullptr);
         // Enable alpha blending for solid fills and geometry (tooltip/popup
         // backgrounds and dimming overlays rely on translucent draws).
