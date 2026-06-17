@@ -63,6 +63,48 @@ do
 	ok(UC.parseManifestVersion("garbage") == nil, "parseManifestVersion garbage")
 end
 
+-- parsePortVersion
+do
+	local e, b = UC.parsePortVersion("0.21.0-macos.7")
+	eq(e, "0.21.0", "parsePortVersion engine")
+	eq(b, "7", "parsePortVersion build")
+	ok(UC.parsePortVersion("0.21.0") == nil, "parsePortVersion rejects bare engine version")
+	ok(UC.parsePortVersion("garbage") == nil, "parsePortVersion rejects garbage")
+end
+
+-- buildUpdateChangelog
+do
+	local port =
+		"VERSION[0.21.0-macos.7][2026/06/15]\n* seven\n\n" ..
+		"VERSION[0.21.0-macos.6][2026/06/13]\n* six\n\n" ..
+		"VERSION[0.20.0-macos.5][2026/06/12]\n* five\n"
+	local engine =
+		"VERSION[0.21.0][2026/06/13]\n* engine 21\n\n" ..
+		"VERSION[0.20.0][2026/06/11]\n* engine 20\n"
+
+	-- Port-only update: installed 0.21.0 build 6 -> only macos.7 is new. Engine
+	-- section is included verbatim; the popup trims it (top header == running
+	-- engine), so it is correct to ship it whole here.
+	local portOnly = UC.buildUpdateChangelog(port, engine, "0.21.0", 6)
+	ok(portOnly:find("0.21.0-macos.7", 1, true) ~= nil, "buildUpdateChangelog keeps newer port entry")
+	ok(portOnly:find("* seven", 1, true) ~= nil, "buildUpdateChangelog keeps newer port body")
+	ok(portOnly:find("0.21.0-macos.6", 1, true) == nil, "buildUpdateChangelog drops installed port entry")
+	ok(portOnly:find("* six", 1, true) == nil, "buildUpdateChangelog drops installed port body")
+	ok(portOnly:find("* five", 1, true) == nil, "buildUpdateChangelog drops older port body")
+	ok(portOnly:find("* engine 21", 1, true) ~= nil, "buildUpdateChangelog appends engine changelog")
+
+	-- Engine update: installed 0.20.0 build 5 -> macos.6 and macos.7 are new.
+	local engineBump = UC.buildUpdateChangelog(port, engine, "0.20.0", 5)
+	ok(engineBump:find("0.21.0-macos.7", 1, true) ~= nil, "buildUpdateChangelog (engine bump) keeps macos.7")
+	ok(engineBump:find("0.21.0-macos.6", 1, true) ~= nil, "buildUpdateChangelog (engine bump) keeps macos.6")
+	ok(engineBump:find("0.20.0-macos.5", 1, true) == nil, "buildUpdateChangelog (engine bump) drops installed macos.5")
+	ok(engineBump:find("* engine 21", 1, true) ~= nil, "buildUpdateChangelog (engine bump) appends engine changelog")
+
+	-- Missing port changelog (older bundle): fall back to the engine changelog.
+	eq(UC.buildUpdateChangelog(nil, engine, "0.21.0", 6), engine, "buildUpdateChangelog falls back to engine text")
+	eq(UC.buildUpdateChangelog("", "", "0.21.0", 6), "", "buildUpdateChangelog empty inputs -> empty")
+end
+
 -- shquote (UpdateCheck + UpdateApply share the same definition)
 eq(UC.shquote("plain"), "'plain'", "shquote plain")
 eq(UC.shquote("a b"), "'a b'", "shquote spaces")

@@ -100,6 +100,10 @@ rsync -a "${app_dir}/runtime/lua/" "${resources}/runtime/lua/"
 version_write_manifest "${app_dir}/manifest.xml" "${resources}/src/manifest.xml" "${mac_build}"
 cp "${app_dir}/changelog.txt" "${resources}/src/changelog.txt"
 cp "${app_dir}/help.txt" "${resources}/src/help.txt"
+# Ship this port's own changelog (VERSION[<engine>-macos.<build>] entries)
+# alongside the engine's. UpdateCheck.lua merges it on top of changelog.txt so
+# the "Update Available" popup leads with the macOS-port notes. See RELEASE.md.
+cp "${repo_root}/macos/changelog.txt" "${resources}/src/changelog-macos.txt"
 # Ship this port's LICENSE (carries the macOS-port + upstream credits), not the
 # submodule's upstream-only copy.
 cp "${repo_root}/LICENSE.md" "${resources}/LICENSE.md"
@@ -108,7 +112,7 @@ cp "${repo_root}/LICENSE.md" "${resources}/LICENSE.md"
 # working directory (<Resources>/src). If a refactor ever drops them one level
 # up in Resources/ again, the reads silently no-op (blank "Version history",
 # update check can't read the local version) — so fail the build loudly here.
-for f in manifest.xml changelog.txt help.txt; do
+for f in manifest.xml changelog.txt changelog-macos.txt help.txt; do
   if [[ ! -f "${resources}/src/${f}" ]]; then
     echo "error: ${f} missing from <Resources>/src — runtime reads it there (GetScriptPath); see package_app.sh." >&2
     exit 1

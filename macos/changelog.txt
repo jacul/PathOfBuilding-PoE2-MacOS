@@ -1,0 +1,31 @@
+VERSION[0.21.0-macos.7][2026/06/15]
+
+* Remember the main window size and position across launches
+
+VERSION[0.21.0-macos.6][2026/06/13]
+
+* Update the bundled Path of Building engine to v0.21.0
+
+VERSION[0.20.0-macos.5][2026/06/12]
+
+* Update the bundled Path of Building engine to v0.20.0
+* Fix a blank "Version history" list in the About window
+
+VERSION[0.19.0-macos.4][2026/06/07]
+
+* Internal updater and versioning cleanup
+
+VERSION[0.19.0-macos.3][2026/06/06]
+
+* Update the bundled Path of Building engine to v0.19.0
+* Add automatic in-app updates that download and install new releases
+* Fix rendering of non-square and texture-array (DDS) images
+
+VERSION[0.16.0-macos.2][2026/06/04]
+
+* Fix importing Runeforged items and spirit quest aggregation
+* Fix missing item and UI colours (implement the GetDrawColor host call)
+
+VERSION[0.16.0-macos.1][2026/05/30]
+
+* First native macOS (Apple Silicon) release of Path of Building (PoE2)

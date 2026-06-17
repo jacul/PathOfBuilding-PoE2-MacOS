@@ -70,6 +70,47 @@ local function parseReleaseTag(tag)
 	return tostring(tag or ""):match("^v?([%d%.]+)%-macos%.(%d+)$")
 end
 
+-- A macOS-port changelog header version "0.21.0-macos.7" -> "0.21.0", "7".
+-- Returns nil for the bare engine version ("0.21.0"), which is how we tell the
+-- port entries apart from the engine ones in a changelog.
+local function parsePortVersion(ver)
+	return tostring(ver or ""):match("^([%d%.]+)%-macos%.(%d+)$")
+end
+
+-- Build the changelog the stock "Update Available" popup renders. It shows the
+-- macOS-port "what's new" entries (only those strictly newer than the installed
+-- build) on top, then the upstream engine changelog verbatim.
+--
+-- The popup (Main.lua:OpenUpdatePopup) walks the file top-down and stops at the
+-- first VERSION header equal to launch.versionNumber, which is the *engine*
+-- number only ("0.21.0"). Port headers ("0.21.0-macos.7") never match it, so we
+-- pre-filter the port section here; the engine section is then trimmed by the
+-- popup to entries above the running engine. Net: port notes always show, engine
+-- notes only when the engine actually bumped.
+local function buildUpdateChangelog(portText, engineText, localEngine, localBuild)
+	local out = {}
+	if portText and portText ~= "" then
+		local including = false
+		for line in (portText .. "\n"):gmatch("(.-)\n") do
+			local ver = line:match("^VERSION%[(.+)%]%[.+%]$")
+			if ver then
+				local pEngine, pBuild = parsePortVersion(ver)
+				including = pEngine ~= nil and isNewer(localEngine, localBuild, pEngine, tonumber(pBuild))
+			end
+			if including then
+				out[#out + 1] = line
+			end
+		end
+	end
+	if engineText and engineText ~= "" then
+		if #out > 0 and out[#out] ~= "" then
+			out[#out + 1] = ""
+		end
+		out[#out + 1] = engineText
+	end
+	return table.concat(out, "\n")
+end
+
 if _TEST then
 	return {
 		repo = repo,
@@ -80,6 +121,8 @@ if _TEST then
 		parseVersionParts = parseVersionParts,
 		isNewer = isNewer,
 		parseReleaseTag = parseReleaseTag,
+		parsePortVersion = parsePortVersion,
+		buildUpdateChangelog = buildUpdateChangelog,
 	}
 end
 
@@ -267,9 +310,34 @@ if pending then
 	pending:close()
 end
 
--- Best effort: surface the new changelog so the stock "Update" popup can show
--- what changed (ignored if the bundle isn't writable).
-run("/bin/cp " .. shquote(stagedApp .. "/Contents/Resources/changelog.txt") .. " " .. shquote(scriptPath .. "/changelog.txt") .. " 2>/dev/null")
+-- Best effort: surface the new changelog so the stock "Update Available" popup
+-- shows what changed. Read both changelogs from the staged (new) bundle, merge
+-- the macOS-port notes on top of the engine notes, and write the result where
+-- the popup reads it (GetScriptPath().."/changelog.txt"). The popup's
+-- break-at-current-version logic then trims the engine section to the entries
+-- newer than the running engine. Ignored if anything is missing or unwritable.
+local function readFile(path)
+	local f = io.open(path, "r")
+	if not f then
+		return nil
+	end
+	local text = f:read("*a")
+	f:close()
+	return text
+end
+local stagedSrc = stagedApp .. "/Contents/Resources/src"
+local combined = buildUpdateChangelog(
+	readFile(stagedSrc .. "/changelog-macos.txt"),
+	readFile(stagedSrc .. "/changelog.txt"),
+	localEngine, localBuild
+)
+if combined ~= "" then
+	local out = io.open(scriptPath .. "/changelog.txt", "w")
+	if out then
+		out:write(combined)
+		out:close()
+	end
+end
 
 ConPrintf("Update %s downloaded and ready to apply.", tag)
 return "normal"
