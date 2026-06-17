@@ -13,14 +13,14 @@ body:
     attributes:
       label: Check version
       options:
-        - label: I'm running the latest version of this macOS port and I've verified this by checking the [Releases page](https://github.com/stevep51/PathOfBuilding-PoE2-MacOS/releases)
+        - label: I'm running the latest version of this macOS port and I've verified this by checking the [Releases page](https://github.com/jacul/PathOfBuilding-PoE2-MacOS/releases)
           required: true
   - type: checkboxes
     id: duplicates
     attributes:
       label: Check for duplicates
       options:
-        - label: I've checked for duplicate open **and closed** issues by using the search function of the [issue tracker](https://github.com/stevep51/PathOfBuilding-PoE2-MacOS/issues?q=is%3Aissue)
+        - label: I've checked for duplicate open **and closed** issues by using the search function of the [issue tracker](https://github.com/jacul/PathOfBuilding-PoE2-MacOS/issues?q=is%3Aissue)
           required: true
   - type: input
     id: macos_version

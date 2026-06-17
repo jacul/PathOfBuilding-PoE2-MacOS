@@ -1,0 +1,12 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Calculation / accuracy / behaviour bug (shared engine)
+    url: https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2/issues/new/choose
+    about: >-
+      Wrong DPS or defences, stat mismatches, and skill/mod behaviour come from the
+      shared upstream Path of Building engine, which this macOS port ships
+      unchanged. Please report those upstream so every platform gets the fix.
+  - name: Questions & discussion (macOS port)
+    url: https://github.com/jacul/PathOfBuilding-PoE2-MacOS/discussions
+    about: >-
+      Questions about installing, building, or using the native macOS port.

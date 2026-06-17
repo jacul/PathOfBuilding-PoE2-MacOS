@@ -63,7 +63,10 @@ The calculation engine, data, passive tree, skills, items and UI logic are **unc
 - **Versioning:** releases keep the upstream engine version and add a macOS build counter (e.g. tag `v0.16.0-macos.1`), shown in-app as `Version: 0.16.0` above `macOS Port (build 1)`. See [RELEASE.md](RELEASE.md) for the scheme.
 
 ## Changelog
-You can find the full version history [here](CHANGELOG.md).
+- **macOS-port changes** — see the [GitHub Releases](https://github.com/jacul/PathOfBuilding-PoE2-MacOS/releases).
+- **Engine changes** — tracked [upstream](https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2/releases).
+
+See [CHANGELOG.md](CHANGELOG.md) for where each kind of change is recorded.
 
 ## Credits
 This distribution stands on the work of others:

@@ -24,11 +24,8 @@ Lua codebase. Where it refers to Windows-only tooling, that is noted explicitly.
 2. [Requesting features](#requesting-features)
 3. [Contributing code](#contributing-code)
 4. [Setting up a development installation](#setting-up-a-development-installation)
-5. [Setting up a development environment](#setting-up-a-development-environment)
-6. [Keeping this port up to date with upstream](#keeping-this-port-up-to-date-with-upstream)
-7. [Path of Building development tutorials](#path-of-building-development-tutorials)
-8. [Exporting GGPK data from Path of Exile](#exporting-ggpk-data-from-path-of-exile)
-9. [Using the inbuilt profiler](#Using-the-inbuilt-profiler)
+5. [Keeping this port up to date with upstream](#keeping-this-port-up-to-date-with-upstream)
+6. [Working on the shared Lua engine](#working-on-the-shared-lua-engine)
 
 ## Reporting bugs
 
@@ -196,270 +193,33 @@ Note: This assumes you are already familiar with Git and basic command line tool
        git merge upstream/dev
 6. Build, run, and test the macOS app before pushing (see [docs/macos.md](docs/macos.md)).
 
-## Setting up a development environment
+## Working on the shared Lua engine
 
-Note: This tutorial assumes that you are already familiar with the development tool of your choice.
+Everything below the macOS host — calculations, game data, the passive tree,
+skills/items, the shared Lua UI, and the developer tooling around them — belongs
+to the **upstream** project, and its documentation lives there. Rather than
+duplicate (and drift from) it, this port points you upstream:
 
-If you want to use a text editor, [Visual Studio Code](https://code.visualstudio.com/) (proprietary) is recommended.
-If you want to use an IDE instead, [PyCharm Community](https://www.jetbrains.com/pycharm/) or [IntelliJ Idea Community](https://www.jetbrains.com/idea/) (open source) are recommended.
-They are all free and support [EmmyLua](https://github.com/EmmyLua), a Lua plugin that comes with a language server, debugger and many pleasant features.
-It is recommended to use it over the built-in Lua plugins.
-
-> **macOS note:** The EmmyLua debugger snippets below were written for Windows and
-> reference `emmy_core.dll` under `%USERPROFILE%`. On macOS the equivalent library
-> is `emmy_core.dylib`, found inside the EmmyLua extension folder under
-> `~/.vscode/extensions/<tangzx.emmylua-...>/debugger/emmy/`. Point `package.cpath`
-> at that `.dylib` instead of the `.dll`. The language-server features (completion,
-> navigation) work the same on macOS without any extra setup.
-
-Please note that EmmyLua is not available for other editors based on Visual Studio Code,
-such as [VSCodium](https://vscodium.com) or [Eclipse Theia](https://theia-ide.org) but can be built from source if needed.
-
-### Visual Studio Code
-
-1. Create a new <kbd>Debug Configuration</kbd> of type <kbd>EmmyLua New Debug</kbd>
-1. Open `./src/Launch.lua`
-1. Click the beginning of the line directly after `function launch:OnInit()`
-1. Insert the debugger code:
-   
-   Automatically:
-   1. Open the Command Palette (<kbd>F1</kbd>)
-   1. Type <kbd>EmmyLua: Insert Emmy Debugger Code</kbd>
-   1. Choose `x64` from the drop-down list
-   
-   Or manually:
-   1. Open the Visual Studio Code extensions folder. On Windows, this defaults to `%USERPROFILE%/.vscode/extensions` 
-   1. Find the sub-folder that contains `emmy_core.dll`. You should find both x86 and x64; pick x64. For example, `C:/Users/someuser/.vscode/extensions/tangzx.emmylua-0.9.22-win32-x64/debugger/emmy/windows/x64`.  Uses this in the snippet below.  Note the version number will change with every update.
-   1. Copy-paste the following code snippet:
-   ```lua
-   	-- Path to emmy_core.dll. You will need to update it to point to the EmmyLua dlls in YOUR installation.
-   	-- Note the "?.dll" at the end of the path is mandatory.
-   	package.cpath = package.cpath .. ";C:/Users/someuser/.vscode/extensions/tangzx.emmylua-0.5.19/debugger/emmy/windows/x64/?.dll"
-   	local dbg = require("emmy_core")
-   	-- This port must match the IDE configuration. Default is 9966.
-   	dbg.tcpListen("localhost", 9966)
-   	--dbg.waitIDE() -- Uncomment this line if you want PoB to wait until the debugger is attached.
-   ```
-1. Set breakpoints in the source with VSCode's built-in breakpoint system (or use a non-local `dbg` and call `_G.dbg.breakHere()`)
-1. Click the <kbd>Run and Debug</kbd> icon on the *Activity Bar*
-1. Make sure <kbd>EmmyLua New Debug</kbd> is selected in the "Run and Debug" dropdown
-1. Start your modified <kbd>Path of Building Community</kbd>
-1. In VSCode click <kbd>Start Debugging</kbd> (the green icon) or press <kbd>F5</kbd>
-1. The debugger should connect
-
-
-#### Excluding directories from EmmyLua
-
-Depending on the amount of system ram you have available and the amount that gets assigned to the jvm running the emmylua language server you might run into issues when trying to debug Path of building.
-Files in `/Data` `/Export` and `/TreeData` can be massive and cause the EmmyLua language server to use a significant amount of memory. Sometimes causing the language server to crash. To avoid this and speed up initialization consider adding an `.emmyrc.json` file to the `.vscode` folder in the root of the Path of building folder with the following content:
-
-```json
-{
-    "$schema": "https://raw.githubusercontent.com/EmmyLuaLs/emmylua-analyzer-rust/refs/heads/main/crates/emmylua_code_analysis/resources/schema.json",
-    "runtime": {
-        "version": "LuaJIT"
-    },
-    "workspace": {
-        "ignoreGlobs": [
-            "**/src/Data/**/*.lua",
-            "**/src/TreeData/**/*.lua",
-            "**/src/Modules/ModParser.lua"
-        ]
-    }
-}
-```
-
-### PyCharm Community / IntelliJ Idea Community
-
-1. Create a new "Debug Configuration" of type "Emmy Debugger(NEW)".
-2. Select "x64" version.
-3. Select if you want the program to block (checkbox) until you attached the debugger (useful if you have to debug the startup process).
-4. Copy the generated code snippet directly below `function launch:OnInit()` in `./src/Launch.lua`.
-5. Start Path of Building Community
-6. Attach the debugger
-
-#### Miscellaneous tips
-
-macOS ships with the standard Unix tools (`grep`, `rg` if installed, etc.) that
-make navigating the code base easier — no extra setup is needed. Build and run
-the native app with `tools/macos/build_app.sh` as described in
-[docs/macos.md](docs/macos.md).
-
-> The upstream guide here covered running the Windows `.exe` under Wine on Linux.
-> That does not apply to this port: there is no Windows `.exe` in this repository,
-> and the app is built and run natively on macOS.
-
-## Testing
-
-PoB uses the [Busted](https://lunarmodules.github.io/busted/) framework to run its tests. Tests are stored under `spec/System` and run automatically when a PR is modified.
-More tests can be added to this folder to test specific functionality, or new test builds can be added to ensure nothing changed that wasn't intended. 
-
-### Running tests
-
-1. Install [Docker](https://www.docker.com/get-started)
-2. Run `docker-compose up` from the command line
-3. Review the results in the terminal
-
-Please try to include tests for your new features in your pull request. Additionally, if your pr breaks a test that should be passing please update it accordingly.
-
-### Debugging tests
-When running tests with a docker container it is possible to use EmmyLua for debugging. Paste in the following right under `function launch:OnInit()` in `./src/Launch.lua`:
-```lua
-	package.cpath = package.cpath .. ";/usr/local/bin/?.so"
-	local dbg = require("emmy_core")
-	-- This port must match the IDE Code configuration. Default is 9966.
-	dbg.tcpListen("localhost", 9966)
-	dbg.waitIDE()
-```
-After running `docker-compose up` the code will wait at the `dbg.waitIDE()` line until a debugger is attached. This will allow stepping through any code that is internal to POB but will not work for busted related code. Note that this only works for unit tests described above.
-
-## Path of Building development tutorials
-
-* [How are mods parsed?](PathOfBuilding-PoE2/docs/addingMods.md)
-* [Mod Syntax](PathOfBuilding-PoE2/docs/modSyntax.md)
-* [How skills work in Path of Building](PathOfBuilding-PoE2/docs/addingSkills.md)
-
-## Exporting GGPK data from Path of Exile
-> [!NOTE]
-> This is an **upstream, Windows-oriented** data-export workflow that is **not part
-> of the macOS port**. It relies on Windows tooling (Visual Studio, the
-> `bun_extract_file.exe`/`.dll` Oodle extractor) and the Windows PoB `.exe`, none
-> of which ship in this repository. It is retained here for reference and for
-> contributors regenerating shared `src/Data` files upstream.
-
-> [!WARNING]   
-> This will not work on files from the torrent that is released before league launches, as it contains no `Data` section.
-
-Note: This tutorial assumes that you are already familiar with the GGPK and its structure. [poe-tool-dev/ggpk.discussion](https://github.com/poe-tool-dev/ggpk.discussion/wiki)
-is a good starting point.
-
-The `./src/Data` folder contains generated files which are created using the scripts in the `./src/Export/Scripts` folder based on Path of Exile game data. 
-If you change any logic/configuration in `./src/Export`, you will need to regenerate the appropriate `./src/Data` files. You can do so by running the `./src/Export` scripts using the `.dat` viewer at `./src/Export/Launch.lua`:
-
-### Obtain an Oodle extractor
-> [!TIP]   
-> Binaries are usually available at https://github.com/zao/ooz/releases.
-
-Note: For this tutorial, you will need a working installation of [Visual Studio Community](https://visualstudio.microsoft.com/vs/community/)
-as well as some familiarity with build tools such as [CMake](https://cmake.org).
-1. In Visual Studio, clone the following repository using this command:
-
-        git clone --recurse-submodules -b master https://github.com/zao/ooz
-2. Configure CMake.
-3. Build `bun_extract_file.exe`, `libbun.dll` and `libooz.dll`.
-
-### Set up the exporter
-1. Copy `bun_extract_file.exe`, `libbun.dll` and `libooz.dll` to `.\src\Export\ggpk\`.
-2. Create a shortcut to `.\runtime\Path{space}of{space}Building-PoE2.exe` with the path to `.\src\Export\Launch.lua` as the first argument. You should end up with something like: 
-
-       "<path to repo>\runtime\Path{space}of{space}Building-PoE2.exe" "<path to repo>\src\Export\Launch.lua"
-3. Run the shortcut.  "Dat View", the GGPK data viewer UI, should appear.  If you get an error, be sure you're using the latest release of Path of Building Community.
-4. Click `Edit Sources...` to display the "New DAT Source" popup.  Click `New` and enter a name.
-5. Paste the full path to `Content.ggpk` into the "Source from GGPK/Steam PoE path" box and hit `Enter`.  For the stand-alone client, the path must include the file-name.  (Do not put anything in the "Source from DAT files" box unless you have already manually unpacked the relevant files.)  
-
-   Example input for the stand-alone client:
-
-       C:\Path of Exile 2\Content.ggpk
-   Example input for Steam:
-
-       C:\Program Files (x86)\Steam\steamapps\common\Path of Exile 2  
-
-   If successful, you should see some cmd windows pop up as the files are unpacked, and then a list of the data tables in the GGPK file should appear.  
-6. Click `Scripts >>` to show the list of available export scripts. Double-clicking a script will run it, and the box to the right will show any output from the script.
-7. If you run into any errors, update the code in `./src/Export` as necessary and try again.
-
-## Using the inbuilt profiler
-The profiler is found at https://github.com/charlesmallah/lua-profiler and is written entirely in lua under a MIT license.
-
-Pressing pause will start and stop the profiler depending upon if profiling is active. This isn't very precise and has very wide scope so if you want to profile a certain section of code you can also call profiler.start() and profiler.stop() at the start and end of code block you want to profile. Then calling profile.report(fileName) will generate a file in the src folder with the profiling data. This file is called the name given to function or if none are given it is called "profiler.log".
-
-This file contains:
-- Total time spent executing
-- A table containing information about the profiling
-  - File, function and line are the file that a given function was executed in and the line of the function definition
-  - Time and % are the time spent executing code within a function and its percentage relative to the total time spent
-  - \# Is the number of times the function was called
-- ~ is displayed if function execution time is less than 0.0001
-
-Here is an example table that could be generated
-```
-> Total time: 0.510000 s
--------------------------------------------------------------------------------------------------------------------------------------
-| FILE                          : FUNCTION                                        : LINE     : TIME        : %        : #           |
--------------------------------------------------------------------------------------------------------------------------------------
-| ...ers\*****\Documents\GitHub\: Anon                                            :     104  : 0.4770      : 93.5     :           2 |
-| Modules/Main                  : Anon                                            :     263  : 0.4770      : 93.5     :           2 |
-| Modules/Build                 : CallMode                                        :     906  : 0.4730      : 92.7     :           2 |
-| Classes/TreeTab               : Draw                                            :     178  : 0.4360      : 85.5     :           2 |
-| Classes/PassiveTreeView       : Draw                                            :      97  : 0.4240      : 83.1     :           2 |
-| Classes/Control               : IsMouseInBounds                                 :      91  : 0.4150      : 81.4     :           5 |
-| Classes/Control               : GetProperty                                     :      83  : 0.4080      : 80.0     :          26 |
-| Classes/PassiveTreeView       : renderConnector                                 :     378  : 0.2400      : 47.1     :        5256 |
-| Classes/PassiveTreeView       : DrawAsset                                       :     751  : 0.0720      : 14.1     :        9532 |
-| Classes/PassiveTreeView       : treeToScreen                                    :     178  : 0.0550      : 10.8     :       27020 |
-| Classes/ControlHost           : DrawControls                                    :      85  : 0.0260      : 5.1      :          12 |
-| Classes/Control               : GetSize                                         :      79  : 0.0230      : 4.5      :        1624 |
-| Classes/PassiveTreeView       : setConnectorColor                               :     363  : 0.0210      : 4.1      :        5884 |
-| Classes/PassiveTreeView       : renderGroup                                     :     333  : 0.0160      : 3.1      :        1222 |
-| Classes/Control               : IsShown                                         :      83  : 0.0120      : 2.4      :         201 |
-| Classes/PassiveTreeView       : getState                                        :     366  : 0.0100      : 2.0      :        5256 |
-| Classes/ControlHost           : ProcessControlsInput                            :      32  : 0.0100      : 2.0      :           6 |
-| Classes/ControlHost           : GetMouseOverControl                             :      24  : 0.0090      : 1.8      :          22 |
-| Classes/Control               : GetProperty                                     :      34  : 0.0070      : 1.4      :        3794 |
-| Classes/EditControl           : IsMouseOver                                     :     114  : 0.0060      : 1.2      :           8 |
-| Classes/DropDownControl       : IsMouseOver                                     :     160  : 0.0050      : 1.0      :          18 |
-| Classes/CheckBoxControl       : IsMouseOver                                     :      14  : 0.0030      : 0.6      :           6 |
-| Classes/ScrollBarControl      : IsMouseOver                                     :      70  : 0.0030      : 0.6      :          27 |
-| Modules/Build                 : GetProperty                                     :     141  : 0.0020      : 0.4      :          99 |
-| Classes/DropDownControl       : CheckDroppedWidth                               :     467  : 0.0020      : 0.4      :          10 |
-| Modules/Common                : __index                                         :      77  : 0.0010      : 0.2      :         306 |
-| Modules/Build                 : GetProperty                                     :     596  : 0.0010      : 0.2      :          18 |
-| Classes/TextListControl       : IsMouseOver                                     :      18  : 0.0010      : 0.2      :           1 |
--------------------------------------------------------------------------------------------------------------------------------------
-| Modules/Main                  : GetProperty                                     :     111  : ~           : ~        :          16 |
-| Classes/TextListControl       : GetProperty                                     :      10  : ~           : ~        :          10 |
-| Classes/PassiveSpec           : CountAllocNodes                                 :     468  : ~           : ~        :          99 |
-| Modules/Build                 : GetProperty                                     :     133  : ~           : ~        :          33 |
-| Modules/Build                 : GetProperty                                     :     532  : ~           : ~        :          26 |
-| Modules/Build                 : GetProperty                                     :     499  : ~           : ~        :           2 |
-| Classes/SearchHost            : IsSearchActive                                  :      68  : ~           : ~        :          32 |
-| Classes/DropDownControl       : GetDropCount                                    :      92  : ~           : ~        :          16 |
-| Modules/Main                  : DrawArrow                                       :     921  : ~           : ~        :          12 |
-| Modules/Build                 : GetProperty                                     :     483  : ~           : ~        :           2 |
-| Modules/Main                  : GetProperty                                     :     154  : ~           : ~        :           3 |
-| Modules/Main                  : Anon                                            :     405  : ~           : ~        :           1 |
-| Classes/TradeQuery            : onFrameFunc                                     :      42  : ~           : ~        :           2 |
-| Classes/TradeQueryRequests    : ProcessQueue                                    :      21  : ~           : ~        :           2 |
-| Classes/LabelControl          : GetProperty                                     :       9  : ~           : ~        :          37 |
-| Modules/Main                  : GetProperty                                     :     143  : ~           : ~        :           4 |
-| Modules/Build                 : GetProperty                                     :     503  : ~           : ~        :           2 |
-| Modules/Main                  : GetProperty                                     :     139  : ~           : ~        :           4 |
-| Modules/Build                 : GetProperty                                     :     544  : ~           : ~        :          26 |
-| Modules/Build                 : GetProperty                                     :     491  : ~           : ~        :           2 |
-| ...ers\*****\Documents\GitHub\: Anon                                            :     166  : ~           : ~        :           1 |
-| Modules/Build                 : IsEnabled                                       :     120  : ~           : ~        :           2 |
-| Classes/EditControl           : GetProperty                                     :      62  : ~           : ~        :          84 |
-| Modules/Build                 : GetProperty                                     :     487  : ~           : ~        :           2 |
-| Modules/Build                 : GetProperty                                     :     495  : ~           : ~        :           2 |
-| Modules/Build                 : GetProperty                                     :     479  : ~           : ~        :           2 |
-| Modules/Build                 : IsEnabled                                       :     126  : ~           : ~        :           2 |
-| Classes/ButtonControl         : IsMouseOver                                     :      30  : ~           : ~        :          64 |
-| Classes/Control               : SetAnchor                                       :      42  : ~           : ~        :           2 |
-| Classes/PassiveTreeView       : screenToTree                                    :     182  : ~           : ~        :           2 |
-| Modules/Build                 : RefreshSkillSelectControls                      :    1174  : ~           : ~        :           2 |
-| ...ers\*****\Documents\GitHub\: Anon                                            :     134  : ~           : ~        :           1 |
-| Modules/Common                : wipeTable                                       :     420  : ~           : ~        :          16 |
-| Modules/Main                  : CallMode                                        :     418  : ~           : ~        :           2 |
-| Classes/DropDownControl       : SelByValue                                      :     122  : ~           : ~        :           2 |
-| Classes/ItemsTab              : GetSocketAndJewelForNodeID                      :    1248  : ~           : ~        :          84 |
-| Classes/Control               : IsEnabled                                       :      34  : ~           : ~        :          54 |
-| Classes/Control               : IsEnabled                                       :      87  : ~           : ~        :          54 |
-| Classes/ScrollBarControl      : SetContentDimension                             :      24  : ~           : ~        :          14 |
-| Classes/EditControl           : UpdateScrollBars                                :     201  : ~           : ~        :           4 |
-| Classes/UndoHandler           : ResetUndo                                       :      19  : ~           : ~        :           2 |
-| Classes/DropDownControl       : SetList                                         :     458  : ~           : ~        :           6 |
-| Classes/EditControl           : CreateUndoState                                 :     737  : ~           : ~        :           2 |
-| Classes/EditControl           : SetText                                         :      90  : ~           : ~        :           2 |
-| Modules/Common                : copyTable                                       :     351  : ~           : ~        :           2 |
--------------------------------------------------------------------------------------------------------------------------------------
-```
+- **Development environment & debugging** — EmmyLua language-server/debugger setup
+  for VS Code and PyCharm/IntelliJ is documented in
+  [upstream CONTRIBUTING.md](https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2/blob/dev/CONTRIBUTING.md).
+  One macOS difference: the EmmyLua native library is `emmy_core.dylib` (not the
+  Windows `emmy_core.dll`), found under
+  `~/.vscode/extensions/<tangzx.emmylua-…>/debugger/emmy/` — point `package.cpath`
+  at that. The language-server features (completion, navigation) work the same on
+  macOS with no extra setup.
+- **How mods and skills are parsed** —
+  [addingMods](https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2/blob/dev/docs/addingMods.md),
+  [modSyntax](https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2/blob/dev/docs/modSyntax.md),
+  [addingSkills](https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2/blob/dev/docs/addingSkills.md).
+- **Exporting GGPK data, regenerating `src/Data`, and the inbuilt profiler** are
+  Windows-oriented upstream workflows that are **not part of this port** (they
+  rely on Windows tooling and the Windows PoB `.exe`, neither of which ships
+  here). See
+  [upstream CONTRIBUTING.md](https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2/blob/dev/CONTRIBUTING.md)
+  if you are regenerating shared data upstream.
+- **Engine tests** run under [Busted](https://lunarmodules.github.io/busted/) /
+  Docker upstream and are validated there; this port does **not** run them in CI
+  (it would exhaust CI memory and the engine is unchanged). For the port's own
+  checks, run `tools/macos/tests/run.sh`, and build/run the app per
+  [docs/macos.md](docs/macos.md).
