@@ -1,3 +1,8 @@
+VERSION[0.21.0-macos.8][2026/06/19]
+
+* Fix the text caret appearing before the first character typed into a newly clicked field
+* Lead the "Update Available" popup with the macOS-port changelog
+
 VERSION[0.21.0-macos.7][2026/06/15]
 
 * Remember the main window size and position across launches
