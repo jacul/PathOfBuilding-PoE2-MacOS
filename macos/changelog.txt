@@ -1,3 +1,7 @@
+VERSION[0.21.0-macos.9][2026/06/20]
+
+* Smooth the passive/atlas tree when zoomed out (mipmapped image rendering)
+
 VERSION[0.21.0-macos.8][2026/06/19]
 
 * Fix the text caret appearing before the first character typed into a newly clicked field
