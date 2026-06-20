@@ -325,22 +325,53 @@ bool decodeDdsArray(const std::vector<unsigned char>& data, const DdsHeaderInfo&
     const int atlasW = cols * cellW;
     const int atlasH = rows * cellH;
 
-    out.rgba.assign(static_cast<size_t>(atlasW) * atlasH * 4, 0);
+    // Pack one mip level of every array layer into a grid atlas. Each layer is
+    // decoded from its own mip chain at this level, so the result is a clean
+    // half-step of level 0 with no bleed across the (unpadded) cell seams.
     std::vector<unsigned char> cell;
-    for (int layer = 0; layer < info.arraySize; ++layer) {
-        const unsigned char* mip0 = data.data() + info.dataOffset + static_cast<size_t>(layer) * perLayer;
-        if (!decodeCell(mip0, cellW, cellH, info.format, cell)) {
-            return false;
+    auto packLevel = [&](int level, int cwL, int chL, std::vector<unsigned char>& dst) -> bool {
+        const int aW = cols * cwL;
+        const int aH = rows * chL;
+        dst.assign(static_cast<size_t>(aW) * aH * 4, 0);
+        const size_t levelOffset = mipChainSizeLevels(cellW, cellH, info.format, level);
+        for (int layer = 0; layer < info.arraySize; ++layer) {
+            const unsigned char* src =
+                data.data() + info.dataOffset + static_cast<size_t>(layer) * perLayer + levelOffset;
+            if (!decodeCell(src, cwL, chL, info.format, cell)) {
+                return false;
+            }
+            const int col = layer % cols;
+            const int row = layer / cols;
+            const int dstX = col * cwL;
+            const int dstY = row * chL;
+            for (int y = 0; y < chL; ++y) {
+                const unsigned char* srcRow = cell.data() + static_cast<size_t>(y) * cwL * 4;
+                unsigned char* dstRow = dst.data() + (static_cast<size_t>(dstY + y) * aW + dstX) * 4;
+                std::memcpy(dstRow, srcRow, static_cast<size_t>(cwL) * 4);
+            }
         }
-        const int col = layer % cols;
-        const int row = layer / cols;
-        const int dstX = col * cellW;
-        const int dstY = row * cellH;
-        for (int y = 0; y < cellH; ++y) {
-            const unsigned char* srcRow = cell.data() + static_cast<size_t>(y) * cellW * 4;
-            unsigned char* dstRow = out.rgba.data() + (static_cast<size_t>(dstY + y) * atlasW + dstX) * 4;
-            std::memcpy(dstRow, srcRow, static_cast<size_t>(cellW) * 4);
+        return true;
+    };
+
+    if (!packLevel(0, cellW, cellH, out.rgba)) {
+        return false;
+    }
+    // Reuse the file's remaining mip levels (level >= 1) down to ~4px cells,
+    // which is as coarse as the host will sample (see selectMipLevel).
+    for (int level = 1; level <= info.mipCount - 1; ++level) {
+        const int cwL = std::max(1, cellW >> level);
+        const int chL = std::max(1, cellH >> level);
+        if (std::min(cwL, chL) < 4) {
+            break;
         }
+        DecodedDdsMip mip;
+        mip.width = cols * cwL;
+        mip.height = rows * chL;
+        if (!packLevel(level, cwL, chL, mip.rgba)) {
+            out.mipLevels.clear();
+            break;
+        }
+        out.mipLevels.push_back(std::move(mip));
     }
 
     out.cellWidth = cellW;
@@ -392,26 +423,54 @@ bool decodeDdsBytes(const std::vector<unsigned char>& ddsData, DecodedDds& out) 
         return false;
     }
 
+    auto decodeRegion = [&](const unsigned char* src, int w, int h, int rowPitch,
+                            std::vector<unsigned char>& dst) -> bool {
+        dst.assign(static_cast<size_t>(w) * h * 4, 0);
+        switch (info.format) {
+            case DdsFormat::Bc1: decodeBc1Region(src, w, h, dst); return true;
+            case DdsFormat::Bc7: decodeBc7Region(src, w, h, dst); return true;
+            case DdsFormat::Rgba8: decodeRgba8Region(src, w, h, rowPitch, dst); return true;
+            default: return false;
+        }
+    };
+
     const unsigned char* mip0 = ddsData.data() + info.dataOffset;
-    out.rgba.assign(static_cast<size_t>(atlasWidth) * atlasHeight * 4, 0);
     out.cellWidth = info.cellWidth;
     out.cellHeight = info.cellHeight;
     out.atlasWidth = atlasWidth;
     out.atlasHeight = atlasHeight;
     out.stackedAtlas = atlasHeight > info.cellHeight || atlasWidth > info.cellWidth;
+    if (!decodeRegion(mip0, atlasWidth, atlasHeight, info.rowPitch, out.rgba)) {
+        return false;
+    }
 
-    switch (info.format) {
-        case DdsFormat::Bc1:
-            decodeBc1Region(mip0, atlasWidth, atlasHeight, out.rgba);
+    // Reuse the file's own mip chain for the whole surface down to ~4px cells
+    // (as coarse as the host samples). resolveAtlasDimensions matched the data
+    // size to a full chain of these dimensions, so the offsets line up.
+    for (int level = 1; ; ++level) {
+        const int wL = std::max(1, atlasWidth >> level);
+        const int hL = std::max(1, atlasHeight >> level);
+        const int cwL = std::max(1, info.cellWidth >> level);
+        const int chL = std::max(1, info.cellHeight >> level);
+        if (std::min(cwL, chL) < 4) {
             break;
-        case DdsFormat::Bc7:
-            decodeBc7Region(mip0, atlasWidth, atlasHeight, out.rgba);
+        }
+        const size_t off = info.dataOffset + mipChainSizeLevels(atlasWidth, atlasHeight, info.format, level);
+        const size_t sz = mip0CompressedSize(wL, hL, info.format);
+        if (off + sz > ddsData.size()) {
+            break;  // file doesn't carry this level
+        }
+        DecodedDdsMip mip;
+        mip.width = wL;
+        mip.height = hL;
+        if (!decodeRegion(ddsData.data() + off, wL, hL, wL * 4, mip.rgba)) {
+            out.mipLevels.clear();
             break;
-        case DdsFormat::Rgba8:
-            decodeRgba8Region(mip0, atlasWidth, atlasHeight, info.rowPitch, out.rgba);
+        }
+        out.mipLevels.push_back(std::move(mip));
+        if (wL == 1 && hL == 1) {
             break;
-        default:
-            return false;
+        }
     }
     return true;
 }

@@ -188,6 +188,72 @@ Before release, verify the native host manually:
 - OAuth redirect server completes account authentication
 - Saves builds under `~/Library/Application Support/Path of Building (PoE2)`
 
+## Rendering
+
+The host draws through SDL3's 2D renderer (`SDL_RenderTexture` /
+`SDL_RenderGeometry`); the Lua application issues the same `DrawImage`,
+`DrawImageQuad` and `DrawString` calls it makes on Windows. Each call is recorded
+and replayed at end-of-frame sorted by `(layer, subLayer, sequence)`, so tooltips
+and popups land on top regardless of the order the application issued them.
+
+### Image textures and mipmaps
+
+Every image (DDS / `.dds.zst`, PNG via Cocoa, TGA) is decoded to RGBA and
+uploaded as a base texture in `macos/src/Host.mm`. SDL3's renderer has **no
+mipmap, trilinear, or anisotropic-filtering support** and samples a single level
+with bilinear filtering, so a heavily minified texture — the atlas/passive tree
+zoomed out — aliases into jagged lines and node art.
+
+To compensate, each image carries a **mipmap chain** of successively half-size
+`SDL_Texture`s, sourced one of two ways:
+
+- **DDS files: their own embedded mip chain.** The PoB tree art ships full mip
+  chains, and the node-art sheets are DDS *texture arrays* (e.g.
+  `skills_128_128_BC1` is 329 layers). `DdsDecode` decodes each level straight
+  from the file and re-packs it into a grid atlas — crucially **per layer**, so
+  unlike a CPU downscale of the already-packed atlas it does **not** bleed across
+  the unpadded cell seams. Every cell at a level shares the same size, so the
+  grid's normalized boundaries stay put and the host's UV math is unchanged.
+- **Everything else: a CPU chain.** PNG (the orbit/connector art) and TGA have no
+  embedded mips, and the rare mip-less DDS falls back here too — successive
+  half-size copies via an alpha-weighted box filter (so transparent texels don't
+  bleed dark colour into edges). Single images, so there are no cell seams to
+  bleed across.
+
+Per draw, `selectMipLevel` picks a level from the on-screen minification
+(`floor(log2 ρ)`) and samples that smaller texture — `DrawImage` rescales its
+source rect, `DrawImageQuad` keeps its normalized UVs. The whole chain is freed
+on `Load`/`Unload`.
+
+Two knobs in `macos/src/Host.mm` approximate the filtering SDL3 can't do:
+
+- **`anisoRho`** collapses the two per-axis minification factors with a geometric
+  mean (area scale) instead of the max, so a long-but-thin orbit connector stays
+  sharp instead of being blurred away — a stand-in for anisotropic filtering.
+- **`kMipLodBias`** (default `0.5`) keeps the chosen level this many LOD steps
+  sharper. Raise it for more smoothing, lower it toward `0` for more sharpness;
+  it is the single tuning constant. After changing it, rebuild with
+  `cmake --build build/macos-arm64`.
+
+The coarsest level the host samples is a ~4px cell (`selectMipLevel`) — below
+that a sprite is too small on screen to matter — so the embedded DDS chain is
+decoded only that far. The CPU fallback builds its full chain down to 1px and
+simply never samples past the cap.
+
+### Known limitations and future work
+
+- **Popping when zooming.** Level selection is discrete (equivalent to
+  `GL_LINEAR_MIPMAP_NEAREST`), so a feature can visibly "pop" as the zoom crosses
+  a level boundary. The Windows SimpleGraphic/OpenGL renderer avoids this with
+  **trilinear** filtering (a continuous blend between two levels) plus anisotropic
+  filtering. Matching it needs a GPU path SDL3's 2D renderer doesn't expose:
+  porting the tree draw to **`SDL_GPU`** (real mipmapped textures + a
+  trilinear/anisotropic sampler in a shader) is the way to remove popping
+  entirely. That is a rendering rewrite, not a tweak — tracked here as the
+  intended future enhancement. A two-pass alpha-blend fake-trilinear was
+  considered and rejected: compositing two semi-transparent levels is not a true
+  lerp and looks worse on the transparent connector art.
+
 ## Runtime behaviour
 
 - User data (builds, settings, cached API responses) is stored under

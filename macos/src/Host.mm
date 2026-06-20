@@ -14,6 +14,7 @@ extern "C" {
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cctype>
 #include <cstdlib>
 #include <cstdarg>
@@ -45,6 +46,14 @@ constexpr const char* kRuntimePath = "__pob_runtime_path";
 
 auto startTime = std::chrono::steady_clock::now();
 
+// One level of a manually-built mipmap chain. SDL3's render API has no mipmap
+// support, so each level is its own SDL texture (level 0 == NativeImage::texture).
+struct MipLevel {
+    SDL_Texture* tex = nullptr;
+    int w = 0;
+    int h = 0;
+};
+
 struct NativeImage {
     SDL_Texture* texture = nullptr;
     int width = 0;
@@ -56,6 +65,8 @@ struct NativeImage {
     bool stackedAtlas = false;
     int layerCount = 1;
     int atlasColumns = 1;
+    // Half-size-per-step mip chain used to keep the tree smooth when zoomed out.
+    std::vector<MipLevel> mips;
 };
 
 struct TextSegment {
@@ -350,15 +361,12 @@ fs::path resolveAssetPath(lua_State* L, const std::string& fileName) {
     return path;
 }
 
-NativeImage* createTextureFromRgba(SDL_Renderer* renderer, int width, int height, const std::vector<unsigned char>& rgba) {
-    if (!renderer || width <= 0 || height <= 0 || rgba.empty()) {
-        return nullptr;
-    }
+SDL_Texture* uploadRgbaTexture(SDL_Renderer* renderer, int width, int height, const unsigned char* rgba) {
     SDL_Surface* surface = SDL_CreateSurfaceFrom(
         width,
         height,
         SDL_PIXELFORMAT_RGBA32,
-        const_cast<unsigned char*>(rgba.data()),
+        const_cast<unsigned char*>(rgba),
         width * 4
     );
     if (!surface) {
@@ -366,10 +374,55 @@ NativeImage* createTextureFromRgba(SDL_Renderer* renderer, int width, int height
     }
     SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
     SDL_DestroySurface(surface);
+    if (texture) {
+        SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    }
+    return texture;
+}
+
+// Halve an RGBA8 image with an alpha-weighted 2x2 box filter. Weighting RGB by
+// source alpha keeps fully-transparent texels from bleeding dark colour into the
+// edges of the tree art as it shrinks.
+std::vector<unsigned char> downsampleRgbaHalf(const std::vector<unsigned char>& src, int w, int h, int& outW, int& outH) {
+    outW = std::max(1, w / 2);
+    outH = std::max(1, h / 2);
+    std::vector<unsigned char> dst(static_cast<size_t>(outW) * outH * 4);
+    for (int y = 0; y < outH; ++y) {
+        const int sy0 = std::min(y * 2, h - 1);
+        const int sy1 = std::min(sy0 + 1, h - 1);
+        for (int x = 0; x < outW; ++x) {
+            const int sx0 = std::min(x * 2, w - 1);
+            const int sx1 = std::min(sx0 + 1, w - 1);
+            const unsigned char* p00 = &src[(static_cast<size_t>(sy0) * w + sx0) * 4];
+            const unsigned char* p01 = &src[(static_cast<size_t>(sy0) * w + sx1) * 4];
+            const unsigned char* p10 = &src[(static_cast<size_t>(sy1) * w + sx0) * 4];
+            const unsigned char* p11 = &src[(static_cast<size_t>(sy1) * w + sx1) * 4];
+            const int a00 = p00[3], a01 = p01[3], a10 = p10[3], a11 = p11[3];
+            const int aSum = a00 + a01 + a10 + a11;
+            unsigned char* d = &dst[(static_cast<size_t>(y) * outW + x) * 4];
+            if (aSum == 0) {
+                d[0] = d[1] = d[2] = d[3] = 0;
+            } else {
+                for (int c = 0; c < 3; ++c) {
+                    const int sum = p00[c] * a00 + p01[c] * a01 + p10[c] * a10 + p11[c] * a11;
+                    d[c] = static_cast<unsigned char>((sum + aSum / 2) / aSum);
+                }
+                d[3] = static_cast<unsigned char>((aSum + 2) / 4);
+            }
+        }
+    }
+    return dst;
+}
+
+// Upload an image's base level (mip 0) and seed its mip chain with it.
+NativeImage* makeBaseImage(SDL_Renderer* renderer, int width, int height, const unsigned char* rgba) {
+    if (!renderer || width <= 0 || height <= 0 || !rgba) {
+        return nullptr;
+    }
+    SDL_Texture* texture = uploadRgbaTexture(renderer, width, height, rgba);
     if (!texture) {
         return nullptr;
     }
-    SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
     auto* image = new NativeImage();
     image->texture = texture;
     image->width = width;
@@ -378,14 +431,85 @@ NativeImage* createTextureFromRgba(SDL_Renderer* renderer, int width, int height
     image->atlasHeight = height;
     image->cellWidth = width;
     image->cellHeight = height;
+    image->mips.push_back({texture, width, height});
     return image;
 }
 
-NativeImage* createTextureFromDecodedDds(SDL_Renderer* renderer, const DecodedDds& decoded) {
-    auto* image = createTextureFromRgba(renderer, decoded.atlasWidth, decoded.atlasHeight, decoded.rgba);
+// Build a half-size-per-step mip chain on the CPU from the base RGBA. Used when
+// the source has no usable mip chain of its own (PNG, TGA, mip-less DDS).
+void appendCpuMipChain(SDL_Renderer* renderer, NativeImage* image, const std::vector<unsigned char>& base, int width, int height) {
+    std::vector<unsigned char> level = base;
+    int lw = width;
+    int lh = height;
+    while (lw > 1 || lh > 1) {
+        int nw = 0, nh = 0;
+        std::vector<unsigned char> next = downsampleRgbaHalf(level, lw, lh, nw, nh);
+        SDL_Texture* mip = uploadRgbaTexture(renderer, nw, nh, next.data());
+        if (!mip) {
+            break;
+        }
+        image->mips.push_back({mip, nw, nh});
+        level = std::move(next);
+        lw = nw;
+        lh = nh;
+    }
+}
+
+NativeImage* createTextureFromRgba(SDL_Renderer* renderer, int width, int height, const std::vector<unsigned char>& rgba) {
+    if (rgba.empty()) {
+        return nullptr;
+    }
+    NativeImage* image = makeBaseImage(renderer, width, height, rgba.data());
     if (!image) {
         return nullptr;
     }
+    appendCpuMipChain(renderer, image, rgba, width, height);
+    return image;
+}
+
+// Free an image and every texture in its mip chain (level 0 == ->texture).
+void destroyNativeImage(NativeImage* image) {
+    if (!image) {
+        return;
+    }
+    if (image->mips.empty() && image->texture) {
+        SDL_DestroyTexture(image->texture);
+    }
+    for (const MipLevel& mip : image->mips) {
+        if (mip.tex) {
+            SDL_DestroyTexture(mip.tex);
+        }
+    }
+    delete image;
+}
+
+NativeImage* createTextureFromDecodedDds(SDL_Renderer* renderer, const DecodedDds& decoded) {
+    if (decoded.rgba.empty()) {
+        return nullptr;
+    }
+    NativeImage* image = makeBaseImage(renderer, decoded.atlasWidth, decoded.atlasHeight, decoded.rgba.data());
+    if (!image) {
+        return nullptr;
+    }
+
+    if (!decoded.mipLevels.empty()) {
+        // Prefer the file's own mip chain: for texture-array atlases it is
+        // filtered per layer, so it doesn't bleed across cell seams the way a
+        // CPU downscale of the packed atlas would.
+        for (const DecodedDdsMip& lvl : decoded.mipLevels) {
+            if (lvl.rgba.empty() || lvl.width <= 0 || lvl.height <= 0) {
+                break;
+            }
+            SDL_Texture* mip = uploadRgbaTexture(renderer, lvl.width, lvl.height, lvl.rgba.data());
+            if (!mip) {
+                break;
+            }
+            image->mips.push_back({mip, lvl.width, lvl.height});
+        }
+    } else {
+        appendCpuMipChain(renderer, image, decoded.rgba, decoded.atlasWidth, decoded.atlasHeight);
+    }
+
     if (decoded.stackedAtlas) {
         image->width = decoded.cellWidth;
         image->height = decoded.cellHeight;
@@ -488,6 +612,48 @@ void cellUvToAtlas(NativeImage* image, int stackLayer, float uvS, float uvT, flo
     const float atlasH = static_cast<float>(image->atlasHeight);
     outS = (ox + uvS * static_cast<float>(image->cellWidth)) / atlasW;
     outT = (oy + uvT * static_cast<float>(image->cellHeight)) / atlasH;
+}
+
+// Mip LOD tuning. SDL3's renderer can't do trilinear/anisotropic filtering, so
+// we snap to a single level (GL_LINEAR_MIPMAP_NEAREST). Without GPU help, the
+// honest isotropic LOD (max of the per-axis minification) over-blurs thin orbit
+// connectors until they vanish, and steps levels early so the change "pops".
+// kMipLodBias keeps the texture this many LOD steps sharper, trading a little
+// aliasing for steadier lines and gentler transitions — raise it for more
+// smoothing, lower it (toward 0) for more sharpness.
+constexpr float kMipLodBias = 0.5f;
+
+// Collapse the two per-axis minification factors into one. The geometric mean
+// (area scale) instead of the max keeps thin, anisotropic features sharp,
+// loosely approximating the GL engine's anisotropic filtering: a 1px-wide line
+// that's long on screen stays visible instead of being blurred to nothing.
+float anisoRho(float rhoX, float rhoY) {
+    if (rhoX <= 0.0f) return rhoY;
+    if (rhoY <= 0.0f) return rhoX;
+    return std::sqrt(rhoX * rhoY);
+}
+
+// Choose a mip level for a draw minified by `rho` source texels per on-screen
+// pixel (rho > 1 means minification).
+int selectMipLevel(const NativeImage* image, float rho) {
+    const int generated = static_cast<int>(image->mips.size()) - 1;
+    if (generated <= 0 || !(rho > 1.0f)) {
+        return 0;
+    }
+    const float lod = std::log2(rho) - kMipLodBias;
+    if (lod <= 0.0f) {
+        return 0;
+    }
+    const int level = static_cast<int>(std::floor(lod));
+    // Stop before a cell shrinks past ~4px: for a sprite atlas this is where
+    // neighbouring cells start bleeding across the (unpadded) cell boundary; for
+    // a plain image (cell == whole texture) it's already imperceptibly small.
+    int cellMax = 0;
+    const int minCell = std::max(1, std::min(image->cellWidth, image->cellHeight));
+    while (cellMax < generated && (minCell >> (cellMax + 1)) >= 4) {
+        ++cellMax;
+    }
+    return std::clamp(level, 0, cellMax);
 }
 
 NativeImage* loadCocoaImage(SDL_Renderer* renderer, const fs::path& path) {
@@ -1930,9 +2096,29 @@ int Host::l_DrawImage(lua_State* L) {
         }
         SDL_FRect src{};
         const bool hasSrc = computeImageSrcRect(image, uvL, uvT, uvR, uvB, stackLayer, src);
+
+        // Pick a mip level from how many source texels each on-screen pixel covers.
+        const float dpi = static_cast<float>(current->displayScale());
+        const float dstPxW = width * dpi;
+        const float dstPxH = height * dpi;
+        const float srcPxW = hasSrc ? src.w : static_cast<float>(image->atlasWidth);
+        const float srcPxH = hasSrc ? src.h : static_cast<float>(image->atlasHeight);
+        const float rhoX = dstPxW > 0.0f ? srcPxW / dstPxW : 0.0f;
+        const float rhoY = dstPxH > 0.0f ? srcPxH / dstPxH : 0.0f;
+        const int level = selectMipLevel(image, anisoRho(rhoX, rhoY));
+        const MipLevel& mip = image->mips[level];
+        if (hasSrc && level > 0) {
+            const float rx = static_cast<float>(mip.w) / image->atlasWidth;
+            const float ry = static_cast<float>(mip.h) / image->atlasHeight;
+            src.x *= rx;
+            src.w *= rx;
+            src.y *= ry;
+            src.h *= ry;
+        }
+
         DrawCommand& cmd = current->newDrawCommand(DrawCommand::Type::Texture);
         cmd.rect = rect;
-        cmd.texture = image->texture;
+        cmd.texture = mip.tex;
         cmd.hasSrc = hasSrc;
         cmd.src = src;
         return 0;
@@ -1982,15 +2168,34 @@ int Host::l_DrawImageQuad(lua_State* L) {
         if (stackArg && lua_isnumber(L, stackArg)) {
             stackLayer = static_cast<int>(lua_tointeger(L, stackArg)) - 1;
         }
+        float minU = 1.0f, minV = 1.0f, maxU = 0.0f, maxV = 0.0f;
         for (int i = 0; i < 4; ++i) {
             float s = 0.0f, t = 0.0f;
             cellUvToAtlas(image, stackLayer, st[i * 2], st[i * 2 + 1], s, t);
             vertices[i].tex_coord.x = s;
             vertices[i].tex_coord.y = t;
+            minU = std::min(minU, s); maxU = std::max(maxU, s);
+            minV = std::min(minV, t); maxV = std::max(maxV, t);
         }
+        // Mip selection: compare the texels the quad spans against its on-screen
+        // size. The normalized UVs stay valid against the smaller mip texture.
+        const float dpi = static_cast<float>(current->displayScale());
+        auto edgePx = [&](int a, int b) {
+            const float dx = vertices[a].position.x - vertices[b].position.x;
+            const float dy = vertices[a].position.y - vertices[b].position.y;
+            return std::sqrt(dx * dx + dy * dy) * dpi;
+        };
+        const float lenU = edgePx(1, 0);
+        const float lenV = edgePx(3, 0);
+        const float texU = (maxU - minU) * image->atlasWidth;
+        const float texV = (maxV - minV) * image->atlasHeight;
+        const float rhoU = lenU > 0.0f ? texU / lenU : 0.0f;
+        const float rhoV = lenV > 0.0f ? texV / lenV : 0.0f;
+        const int level = selectMipLevel(image, anisoRho(rhoU, rhoV));
+
         DrawCommand& cmd = current->newDrawCommand(DrawCommand::Type::Geometry);
         std::memcpy(cmd.verts, vertices, sizeof(vertices));
-        cmd.texture = image->texture;
+        cmd.texture = image->mips[level].tex;
         cmd.geomTextured = true;
     } else if (!requestedImage) {
         DrawCommand& cmd = current->newDrawCommand(DrawCommand::Type::Geometry);
@@ -2076,9 +2281,8 @@ int Host::l_NewImageHandle(lua_State* L) {
 
     lua_pushcfunction(L, [](lua_State* L) -> int {
         NativeImage* existing = imageFromLua(L, 1);
-        if (existing && existing->texture) {
-            SDL_DestroyTexture(existing->texture);
-            delete existing;
+        if (existing) {
+            destroyNativeImage(existing);
             lua_pushnil(L);
             lua_setfield(L, 1, "__native");
         }
@@ -2099,9 +2303,8 @@ int Host::l_NewImageHandle(lua_State* L) {
 
     lua_pushcfunction(L, [](lua_State* L) -> int {
         NativeImage* existing = imageFromLua(L, 1);
-        if (existing && existing->texture) {
-            SDL_DestroyTexture(existing->texture);
-            delete existing;
+        if (existing) {
+            destroyNativeImage(existing);
         }
         lua_pushnil(L);
         lua_setfield(L, 1, "__native");
