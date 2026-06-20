@@ -2049,11 +2049,17 @@ int Host::l_DrawStringCursorIndex(lua_State* L) {
         // Match the scaled rendering: the cursor position is in virtual coords, so
         // scale it (and the font height) to the physical space the glyphs occupy.
         double scale = current->displayScale();
+        // stringCursorIndex returns a 0-based byte offset, but PoB's Lua treats the
+        // result as a 1-based caret position (range 1..#text+1, used as
+        // buf:sub(1, caret - 1) / buf:sub(caret), and as clipIndex - 1 by the list
+        // controls). Without the +1 the caret starts at 0 on a fresh click, so the
+        // first typed character ends up behind the caret (typing "abcd" yields
+        // "bcda").
         lua_pushinteger(L, current->fontRenderer.stringCursorIndex(
             height * scale, font, text,
-            static_cast<int>(curX * scale), static_cast<int>(curY * scale)));
+            static_cast<int>(curX * scale), static_cast<int>(curY * scale)) + 1);
     } else {
-        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 1);
     }
     return 1;
 }
