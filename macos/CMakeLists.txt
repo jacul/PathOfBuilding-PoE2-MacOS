@@ -14,6 +14,19 @@ pkg_check_modules(ZSTD REQUIRED libzstd)
 find_package(CURL REQUIRED)
 find_package(ZLIB REQUIRED)
 
+# Bundle identifier. Development builds append "-dev" so a dev run and an
+# installed release register as separate apps with macOS (distinct preferences,
+# saved window state, LaunchServices entry) instead of fighting over one
+# identity. tools/macos/build_app.sh enables MACOS_DEV_BUILD; package_app.sh
+# builds the release identity (MACOS_DEV_BUILD OFF).
+set(MACOS_BUNDLE_ID "community.pathofbuilding.poebuild2"
+    CACHE STRING "Base macOS bundle identifier (release)")
+option(MACOS_DEV_BUILD "Append -dev to the bundle id for side-by-side dev installs" OFF)
+set(_macos_bundle_id "${MACOS_BUNDLE_ID}")
+if(MACOS_DEV_BUILD)
+    set(_macos_bundle_id "${_macos_bundle_id}-dev")
+endif()
+
 set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/AppIcon.icns")
 set_source_files_properties("${APP_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 
@@ -58,7 +71,7 @@ target_compile_options(PathOfBuilding-PoE2 PRIVATE
 set_target_properties(PathOfBuilding-PoE2 PROPERTIES
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_BUNDLE_NAME "Path of Building (PoE2)"
-    MACOSX_BUNDLE_GUI_IDENTIFIER "community.pathofbuilding.poebuild2"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "${_macos_bundle_id}"
     MACOSX_BUNDLE_ICON_FILE "AppIcon"
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
 )

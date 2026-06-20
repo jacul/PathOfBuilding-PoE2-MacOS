@@ -19,8 +19,8 @@ application is consumed pristine from upstream:
     patching** `Launch.lua`/`Main.lua`. The stock update toast, "Update Ready"
     button and startup/periodic auto-check are reused unchanged.
 - `tools/macos/` — build/package/version scripts (`build_app.sh`,
-  `package_app.sh`, `set_version.sh`), shared helpers in `lib/`, and unit tests
-  in `tests/`.
+  `run_dev.sh`, `package_app.sh`, `set_version.sh`), shared helpers in `lib/`,
+  and unit tests in `tests/`.
 - `patches/` — the only macOS-specific Lua **diffs**, applied to the **bundled**
   copy at package time (the submodule is never modified):
   - `0001-main-macos-branding.patch` — cosmetic only: the About/GitHub links and
@@ -57,15 +57,27 @@ does not embed the Lua app).
 
 ## Dev run
 
-Run the host with the working directory inside the submodule so it finds the
+The host needs its working directory inside the submodule so it finds the
 upstream Lua. The submodule's manifest is untagged, so the app runs in **dev
 mode**: the in-app updater is off and builds/settings stay in the checkout
 (not `~/Library`). The `patches/` are **not** needed for a dev run.
 
 ```bash
+tools/macos/run_dev.sh        # build (incrementally) + launch
+tools/macos/run_dev.sh -n     # launch the existing build, skip the rebuild
+```
+
+`run_dev.sh` builds with `build_app.sh`, then `cd`s into the submodule and runs
+the host for you. Equivalent to doing it by hand:
+
+```bash
 ( cd PathOfBuilding-PoE2 && \
   ../build/macos-arm64/PathOfBuilding-PoE2.app/Contents/MacOS/PathOfBuilding-PoE2 )
 ```
+
+Run it from a terminal — a Finder double-click launches with the wrong working
+directory, so the dev build can't locate the submodule's Lua. (The
+Finder-launchable, self-contained app is the packaged release below.)
 
 ## Package
 

@@ -37,7 +37,9 @@ fi
 echo "Packaging PoB ${plist_engine} (macOS port build ${mac_build}) -> tag v${plist_engine}-macos.${mac_build}"
 
 "${repo_root}/tools/macos/fetch_fonts.sh"
-"${repo_root}/tools/macos/build_app.sh"
+# Build with the release bundle identity (build_app.sh defaults to the "-dev"
+# suffix for development runs; see macos/CMakeLists.txt).
+POB_RELEASE_BUILD=1 "${repo_root}/tools/macos/build_app.sh"
 
 rm -rf "${dist_dir}"
 mkdir -p "${dist_dir}"

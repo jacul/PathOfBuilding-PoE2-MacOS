@@ -8,7 +8,7 @@
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
-  <string>community.pathofbuilding.poebuild2</string>
+  <string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
   <key>CFBundleName</key>
   <string>Path of Building (PoE2)</string>
   <key>CFBundlePackageType</key>
