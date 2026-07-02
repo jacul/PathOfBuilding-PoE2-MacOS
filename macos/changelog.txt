@@ -1,3 +1,11 @@
+VERSION[0.22.0-macos.11][2026/07/01]
+
+* Update the bundled Path of Building engine to v0.22.0
+
+VERSION[0.21.1-macos.10][2026/06/23]
+
+* Update the bundled Path of Building engine to v0.21.1
+
 VERSION[0.21.0-macos.9][2026/06/20]
 
 * Smooth the passive/atlas tree when zoomed out (mipmapped image rendering)
