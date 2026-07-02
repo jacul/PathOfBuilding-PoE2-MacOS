@@ -61,6 +61,23 @@ Prerequisites (via Homebrew): `cmake ninja sdl3 luajit curl zlib zstd`.
 - `main` — production; each release lands here and is tagged.
 - Feature work can branch off `develop` as `feature/<name>` and merge back.
 
+### Engine catch-up release (scripted)
+
+When the only change is a new upstream engine release, one script does the
+whole flow below:
+
+```bash
+tools/macos/release.sh              # pin latest upstream release, or:
+tools/macos/release.sh v0.23.0      # pin a specific upstream tag
+```
+
+It pins the submodule, verifies `patches/` still apply, bumps the build
+number and changelog, builds + packages, runs the port tests, smoke-launches
+the app, commits on `develop`, fast-forwards `main`, and tags — erroring out
+at the first failed step (and printing how to undo). Nothing is pushed until
+you confirm at the end; it then pushes `main` + `develop` + tag in one push.
+Watching the release workflow afterwards is manual (Actions tab).
+
 ### Release flow (recommended)
 
 Pushing a tag matching `v*-macos.*` triggers the **macOS release** workflow
