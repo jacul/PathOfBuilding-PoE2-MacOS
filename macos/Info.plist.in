@@ -15,6 +15,23 @@
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
   <string>0.22.0</string>
+  <!-- pob2:// protocol handler ("Open in PoB" links on pobb.in / poe.ninja).
+       The dev build registers the scheme too (distinct CFBundleURLName via the
+       -dev bundle id), but macOS routes each pob2:// open to a single default
+       handler app; see docs/macos.md. -->
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>CFBundleURLName</key>
+      <string>${MACOSX_BUNDLE_GUI_IDENTIFIER}.pob2</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>pob2</string>
+      </array>
+    </dict>
+  </array>
   <key>CFBundleVersion</key>
   <string>11</string>
   <key>LSMinimumSystemVersion</key>

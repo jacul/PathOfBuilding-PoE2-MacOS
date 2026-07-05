@@ -295,6 +295,30 @@ simply never samples past the cap.
     clears the download quarantine, relaunches, and cleans up the cache. macOS
     lets a detached script replace a running bundle, so no native `Update.exe`
     equivalent is required.
+- **`pob2://` links** ("Open in PoB" on pobb.in / poe.ninja / maxroll.gg) are
+  handled without patching the Lua side. The scheme is registered via
+  `CFBundleURLTypes` in `macos/Info.plist.in`; macOS delivers the URL as a
+  GetURL Apple event, which SDL3 surfaces as a drop event carrying the raw URL
+  string. The host routes it to upstream's existing startup path — Main.lua
+  reads the URI from `arg[1]` once during `OnInit`:
+  - *App not running:* the host drains the event queue before `OnInit`
+    (`Host::consumeLaunchUrls`) and injects the URI into the Lua `arg` table.
+  - *App already running:* `arg[1]` was already consumed, so the host starts a
+    fresh instance of its own executable with the URI as `argv[1]` — the same
+    new-window behaviour as the Windows protocol handler.
+  - *Dev + release both installed:* both flavours claim the scheme (dev under
+    its `-dev` bundle id), but Launch Services routes every `pob2://` open to a
+    single default handler — on a dev machine, whichever app registered first —
+    even when both are running; the other app never sees the URL. The binding
+    is per bundle *identity*, and same-id copies collapse: if the release
+    identity is the default, Launch Services launches its preferred copy
+    (`/Applications` beats checkout copies), so testing the release flavour
+    from `dist/` requires targeting it explicitly with
+    `open -a <path to .app> "pob2://pobbin/<id>"`. Note a
+    URL-click cold start of the *dev* app fails like any Finder launch of it
+    (starts in `/`, can't find the checkout's Lua — see "Dev run"); while it's
+    running, links work because the spawned instance inherits its working
+    directory.
 
 ## Release Notes
 

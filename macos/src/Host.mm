@@ -28,7 +28,11 @@ extern "C" {
 #include <unistd.h>
 #include <zlib.h>
 #include <cerrno>
+#include <climits>
 #include <cstring>
+#include <crt_externs.h>
+#include <mach-o/dyld.h>
+#include <spawn.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -853,6 +857,20 @@ fs::path findRepoRoot(fs::path start) {
     return start;
 }
 
+// Hand a pob2:// URI to a fresh copy of this executable, mirroring the Windows
+// protocol handler: the Lua side only consumes URIs from arg[1] at startup, so
+// a running instance never imports in place.
+void spawnUrlInstance(const char* url) {
+    char exe[PATH_MAX];
+    uint32_t size = sizeof(exe);
+    if (_NSGetExecutablePath(exe, &size) != 0) {
+        return;
+    }
+    const char* argv[] = {exe, url, nullptr};
+    pid_t pid = 0;
+    posix_spawn(&pid, exe, nullptr, nullptr, const_cast<char* const*>(argv), *_NSGetEnviron());
+}
+
 fs::path bundleResourcesPath() {
     @autoreleasepool {
         NSString* resourcePath = [[NSBundle mainBundle] resourcePath];
@@ -1595,7 +1613,39 @@ bool Host::loadLaunchScript() {
     return true;
 }
 
+// A pob2:// link that launched the app arrives as a GetURL Apple event on the
+// first event pump, which SDL surfaces as a drop event carrying the raw URL.
+// Main.lua reads the URI from arg[1] once during OnInit, so it must be routed
+// there before the Lua side boots. arg[1] can already be taken (command-line
+// launch), and macOS can deliver more than one URL; extras go to a fresh
+// instance, same as a link opened while we're already running.
+void Host::consumeLaunchUrls() {
+    SDL_PumpEvents();
+    SDL_Event event;
+    while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_DROP_FILE, SDL_EVENT_DROP_FILE) == 1) {
+        if (!event.drop.data || std::strncmp(event.drop.data, "pob2:", 5) != 0) {
+            continue;
+        }
+        lua_getglobal(L, "arg");
+        if (!lua_istable(L, -1)) {
+            lua_pop(L, 1);
+            continue;
+        }
+        lua_rawgeti(L, -1, 1);
+        bool argTaken = !lua_isnil(L, -1);
+        lua_pop(L, 1);
+        if (argTaken) {
+            spawnUrlInstance(event.drop.data);
+        } else {
+            lua_pushstring(L, event.drop.data);
+            lua_rawseti(L, -2, 1);
+        }
+        lua_pop(L, 1);
+    }
+}
+
 int Host::run() {
+    consumeLaunchUrls();
     callMainObject("OnInit");
     while (running) {
         pumpEvents();
@@ -1782,6 +1832,13 @@ void Host::pumpEvents() {
             }
         } else if (event.type == SDL_EVENT_TEXT_INPUT) {
             callMainObjectKey("OnChar", event.text.text);
+        } else if (event.type == SDL_EVENT_DROP_FILE) {
+            // A pob2:// link clicked while we're already running (SDL delivers
+            // the GetURL Apple event as a drop). arg[1] was consumed at
+            // startup, so open the URI in a new instance.
+            if (event.drop.data && std::strncmp(event.drop.data, "pob2:", 5) == 0) {
+                spawnUrlInstance(event.drop.data);
+            }
         }
     }
 }

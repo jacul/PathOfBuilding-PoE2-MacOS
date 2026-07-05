@@ -69,6 +69,7 @@ private:
 
     bool initLua(int argc, char** argv);
     bool loadLaunchScript();
+    void consumeLaunchUrls();
     void registerApi();
     void registerPreloadModules();
     void pumpEvents();
