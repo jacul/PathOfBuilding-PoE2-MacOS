@@ -1,3 +1,7 @@
+VERSION[0.22.0-macos.12][2026/07/05]
+
+* Support pob2:// build links ("Open in Path of Building" on pobb.in, poe.ninja, maxroll.gg, ...)
+
 VERSION[0.22.0-macos.11][2026/07/01]
 
 * Update the bundled Path of Building engine to v0.22.0
