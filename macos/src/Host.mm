@@ -1649,7 +1649,17 @@ int Host::run() {
     callMainObject("OnInit");
     while (running) {
         pumpEvents();
-        if (renderer) {
+        // An occluded window renders nothing anyway, and SDL's Metal backend
+        // has an unchecked per-draw buffer allocation that segfaulted a window
+        // left hidden for hours (SetDrawState memcpy to NULL; reported
+        // upstream). Keep events, subscripts and OnFrame running so downloads
+        // and the updater stay live, but skip all rendering — OnFrame's draw
+        // commands are simply discarded by the next beginFrameDraw — and slow
+        // the tick while nothing is visible.
+        const bool windowHidden = window &&
+            (SDL_GetWindowFlags(window) &
+             (SDL_WINDOW_OCCLUDED | SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN)) != 0;
+        if (renderer && !windowHidden) {
             SDL_SetRenderViewport(renderer, nullptr);
             SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
             SDL_RenderClear(renderer);
@@ -1657,12 +1667,12 @@ int Host::run() {
         beginFrameDraw();
         subScriptManager.processFrame(L, kMainObject);
         callMainObject("OnFrame");
-        if (renderer) {
+        if (renderer && !windowHidden) {
             flushDrawCommands();
             SDL_SetRenderViewport(renderer, nullptr);
             SDL_RenderPresent(renderer);
         }
-        SDL_Delay(16);
+        SDL_Delay(windowHidden ? 100 : 16);
     }
     callMainObject("OnExit");
     return 0;
