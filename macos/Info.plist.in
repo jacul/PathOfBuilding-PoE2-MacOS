@@ -14,7 +14,7 @@
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.22.0</string>
+  <string>0.23.1</string>
   <!-- pob2:// protocol handler ("Open in PoB" links on pobb.in / poe.ninja).
        The dev build registers the scheme too (distinct CFBundleURLName via the
        -dev bundle id), but macOS routes each pob2:// open to a single default
@@ -33,7 +33,7 @@
     </dict>
   </array>
   <key>CFBundleVersion</key>
-  <string>13</string>
+  <string>14</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSHighResolutionCapable</key>

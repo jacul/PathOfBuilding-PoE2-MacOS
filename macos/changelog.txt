@@ -1,3 +1,7 @@
+VERSION[0.23.1-macos.14][2026/07/27]
+
+* Update the bundled Path of Building engine to v0.23.1
+
 VERSION[0.22.0-macos.13][2026/07/05]
 
 * Skip rendering while the window is minimized or fully hidden — avoids a crash in SDL's Metal renderer after long background runs and cuts idle CPU/GPU usage
