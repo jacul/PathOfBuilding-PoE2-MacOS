@@ -21,6 +21,15 @@ fi
 # ship a mislabelled build.
 # shellcheck source=tools/macos/lib/version.sh
 source "${repo_root}/tools/macos/lib/version.sh"
+# shellcheck source=tools/macos/lib/bundle_libs.sh
+source "${repo_root}/tools/macos/lib/bundle_libs.sh"
+
+for tool in install_name_tool codesign otool; do
+  if ! command -v "${tool}" >/dev/null 2>&1; then
+    echo "Missing required tool: ${tool} (Xcode command line tools)" >&2
+    exit 1
+  fi
+done
 plist="${repo_root}/macos/Info.plist.in"
 mac_build="$(version_build_from_plist "${plist}")"
 plist_engine="$(version_engine_from_plist "${plist}")"
@@ -44,6 +53,15 @@ POB_RELEASE_BUILD=1 "${repo_root}/tools/macos/build_app.sh"
 rm -rf "${dist_dir}"
 mkdir -p "${dist_dir}"
 cp -R "${app_src}" "${app_dst}"
+
+# Make the bundle stand on its own: copy the Homebrew libraries it links against
+# (SDL3, LuaJIT, zstd) into Contents/Frameworks and repoint the load commands at
+# @executable_path. Without this the shipped .app only launches on a Mac that has
+# those formulae installed — everyone else gets a dyld "Library not loaded"
+# crash before any of our code runs, which the README's stated requirements
+# (Apple Silicon + macOS 13) give no hint of. See lib/bundle_libs.sh.
+echo "Bundling native dependencies..."
+bundle_libs_into_app "${app_dst}" "${app_dst}/Contents/MacOS/PathOfBuilding-PoE2"
 
 resources="${app_dst}/Contents/Resources"
 mkdir -p "${resources}"
@@ -120,6 +138,59 @@ for f in manifest.xml changelog.txt changelog-macos.txt help.txt; do
     exit 1
   fi
 done
+
+# Guard the "runs without Homebrew" promise: if anything in the bundle still
+# resolves to an absolute path outside the OS, the download crashes on launch for
+# every user who lacks that formula. Fail here rather than ship it.
+shopt -s nullglob
+leftover="$(bundle_libs_check_selfcontained \
+  "${app_dst}/Contents/MacOS/PathOfBuilding-PoE2" \
+  "${app_dst}/Contents/Frameworks"/*.dylib)"
+shopt -u nullglob
+if [[ -n "${leftover}" ]]; then
+  echo "error: bundle is not self-contained — still links against:" >&2
+  echo "${leftover}" | sed 's/^/  /' >&2
+  echo "See tools/macos/lib/bundle_libs.sh." >&2
+  exit 1
+fi
+
+# Guard the redistribution notices: every library we ship must have its license
+# text alongside it. bundle_libs_into_app copies them, but the Lua rsync above
+# writes into the same Resources tree — so verify against the finished bundle
+# that nothing disturbed them.
+if ! bundle_libs_check_notices "${app_dst}"; then
+  echo "error: bundled libraries are missing their license notices." >&2
+  echo "See tools/macos/lib/bundle_libs.sh." >&2
+  exit 1
+fi
+echo "Third-party notices: $(ls "${resources}/licenses" | tr '\n' ' ')"
+
+# Declare the minimum macOS the artifact actually runs on, rather than the one we
+# would like it to. The floor is the highest LC_BUILD_VERSION among the host
+# binary and the bundled libraries, and the libraries are Homebrew bottles built
+# on (and targeted at) whatever machine produced them — so the release builder's
+# OS sets it. Writing the measured value means LSMinimumSystemVersion cannot
+# drift into a promise the download does not keep: users on an older macOS get
+# LaunchServices' "requires macOS X" refusal instead of a dyld crash.
+shopt -s nullglob
+min_os="$(bundle_libs_min_os \
+  "${app_dst}/Contents/MacOS/PathOfBuilding-PoE2" \
+  "${app_dst}/Contents/Frameworks"/*.dylib)"
+shopt -u nullglob
+if [[ -z "${min_os}" ]]; then
+  echo "error: could not determine the bundle's minimum macOS version." >&2
+  exit 1
+fi
+/usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion ${min_os}" \
+  "${app_dst}/Contents/Info.plist"
+echo "Minimum macOS: ${min_os} (measured from the built bundle)"
+
+# Sign the bundle now that its Frameworks and Resources are final. The load
+# commands were rewritten above, which invalidates the linker's ad-hoc signature;
+# an unsigned or stale-signed binary is killed at launch on Apple Silicon. Still
+# ad-hoc (not notarized), so first launch keeps the right-click → Open step.
+codesign --force --sign - --timestamp=none "${app_dst}"
+codesign --verify --strict "${app_dst}"
 
 mkdir -p "${runtime_dir}"
 rm -rf "${runtime_dir}/Path of Building (PoE2).app"

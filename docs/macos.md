@@ -42,7 +42,7 @@ git submodule update --init --recursive
 ## Requirements
 
 - Apple Silicon Mac
-- macOS 13 or newer
+- macOS 14 or newer
 - `git`, and Homebrew packages: `cmake`, `ninja`, `sdl3`, `luajit`, `curl`, `zlib`, `zstd`
 
 ## Build
@@ -111,6 +111,76 @@ tags the manifest with `platform="macos-arm64"` and the port build counter
 `dist/macos-arm64/PathOfBuilding-PoE2-macos-arm64.zip` (plus a `.sha256`). It
 also refreshes `runtime-macos-arm64/`. If a patch no longer applies after an
 engine bump, packaging fails loudly — that is the signal to re-roll it.
+
+### Self-contained bundle
+
+The linker records each Homebrew dependency by absolute install name
+(`/opt/homebrew/opt/sdl3/lib/libSDL3.0.dylib` and friends), so a bundle shipped
+as built only launches on a Mac that has those formulae — everyone else gets a
+dyld `Library not loaded` crash before any of our code runs. Packaging therefore
+copies SDL3, LuaJIT and zstd into `Contents/Frameworks`, rewrites the load
+commands to `@executable_path/../Frameworks/…` (transitively, via
+`lib/bundle_libs.sh`), and re-signs — rewriting load commands invalidates the
+linker's ad-hoc signature, and an unsigned binary is killed at launch on Apple
+Silicon. `libcurl` and `libz` are *not* bundled: those resolve to `/usr/lib` and
+ship with macOS.
+
+Packaging then asserts that nothing in the bundle still points outside the OS and
+**fails** if anything does, so the "Apple Silicon + macOS 14, nothing else"
+requirement in the README cannot silently regress. To check a built bundle by
+hand:
+
+```bash
+otool -L "dist/macos-arm64/Path of Building (PoE2).app/Contents/MacOS/PathOfBuilding-PoE2"
+```
+
+The signature stays ad-hoc (the app is not notarized), so the first-launch
+right-click → **Open** step is unchanged.
+
+### Minimum macOS version
+
+`LSMinimumSystemVersion` is **measured from the finished bundle**, not chosen:
+packaging takes the highest `LC_BUILD_VERSION` `minos` across the host binary and
+the bundled libraries and writes that into `Contents/Info.plist`. dyld refuses
+any image whose minimum exceeds the running OS, so that highest value is the real
+floor.
+
+It lands where it does because Homebrew bottles are built on — and therefore
+targeted at — the machine that built them. On a macOS 26 workstation all three
+bottles report `minos 26.0`; on the `macos-14` release runner they report 14. So
+the release builder's OS sets the floor for everyone, and **no CMake setting on
+our side can lower it** while the libraries come from bottles. Bumping the
+runner image raises the minimum for users, which is worth remembering before
+changing `runs-on` in `.github/workflows/macos-release.yml`.
+
+Because the value is measured, a locally packaged build honestly declares the
+workstation's OS — expect a higher number than a CI release, and do not ship it.
+
+Supporting an older macOS than the runner means building SDL3, LuaJIT and zstd
+from source with an explicit `CMAKE_OSX_DEPLOYMENT_TARGET` instead of consuming
+bottles. That also buys pinned, reproducible dependency versions and a CI build
+that no longer depends on what `brew` happened to resolve that day; the cost is
+build time and owning the upgrade cadence.
+
+### Third-party notices
+
+Shipping those libraries makes the release a binary redistribution of them, so
+packaging also copies each one's upstream license text into
+`Contents/Resources/licenses/`, taken from the formula's Homebrew prefix so it
+always matches the version actually bundled. zstd's BSD-3 terms require the
+notice accompany binary redistributions; SDL3 (zlib) and LuaJIT (MIT) are
+included on the same basis. zstd is dual-licensed and ships both `LICENSE`
+(BSD-3) and `COPYING` (GPLv2), so both are copied rather than choosing on the
+project's behalf.
+
+`licenses/BUNDLED.txt` records `<dylib> <formula> <notice…>` per library.
+Packaging reads it back against the finished bundle and **fails** if any
+bundled library is unrecorded or its notice is missing or empty — so a library
+added later cannot ship without its notice. Libraries resolved from `/usr/lib`
+are not redistributed and need no notice.
+
+Note this covers only what the `.app` ships. `LICENSE.md` remains the notice
+file for the engine and the port's own sources.
 
 ## Updating to a new upstream engine release
 
