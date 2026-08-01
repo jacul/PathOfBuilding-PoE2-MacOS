@@ -8,11 +8,14 @@
 # Usage:
 #   tools/macos/run_dev.sh            # build, then launch
 #   tools/macos/run_dev.sh -n         # launch the existing build, skip rebuild
+#   tools/macos/run_dev.sh -c         # rebuild from scratch, then launch
 set -euo pipefail
 
 usage() {
-  echo "usage: $(basename "$0") [-n|--no-build]" >&2
-  echo "  build (incrementally) and launch the dev build; -n skips the rebuild" >&2
+  echo "usage: $(basename "$0") [-n|--no-build | -c|--clean]" >&2
+  echo "  build (incrementally) and launch the dev build" >&2
+  echo "  -n  skip the rebuild and launch what is already there" >&2
+  echo "  -c  discard the build dir and rebuild from scratch first" >&2
 }
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -20,17 +23,31 @@ app_dir="${repo_root}/PathOfBuilding-PoE2"
 bin="${repo_root}/build/macos-arm64/PathOfBuilding-PoE2.app/Contents/MacOS/PathOfBuilding-PoE2"
 
 build=1
-case "${1:-}" in
-  -n|--no-build) build=0 ;;
-  -h|--help) usage; exit 0 ;;
-  "") ;;
-  *) echo "unknown option: $1" >&2; usage; exit 2 ;;
-esac
+clean=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--no-build) build=0 ;;
+    -c|--clean) clean=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown option: $1" >&2; usage; exit 2 ;;
+  esac
+  shift
+done
+
+if [[ "${build}" == 0 && "${clean}" == 1 ]]; then
+  echo "error: -n and -c are contradictory (one skips the build, the other redoes it)" >&2
+  usage
+  exit 2
+fi
 
 if [[ "${build}" == 1 ]]; then
   # Suppress build_app.sh's "Dev run" hint (POB_RUN_HINT=0) — we're about to
   # launch the app, so the hint would just be noise.
-  POB_RUN_HINT=0 "${repo_root}/tools/macos/build_app.sh"
+  if [[ "${clean}" == 1 ]]; then
+    POB_RUN_HINT=0 "${repo_root}/tools/macos/build_app.sh" --clean
+  else
+    POB_RUN_HINT=0 "${repo_root}/tools/macos/build_app.sh"
+  fi
 fi
 
 if [[ ! -x "${bin}" ]]; then

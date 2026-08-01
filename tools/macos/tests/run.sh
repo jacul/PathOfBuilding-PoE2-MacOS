@@ -20,6 +20,7 @@ run() { # run <label> <cmd...>
 
 run "lint"            bash "${here}/lint.sh"
 run "version.sh"      bash "${here}/version_test.sh"
+run "build_cache.sh"  bash "${here}/build_cache_test.sh"
 run "set_version.sh"  bash "${here}/set_version_test.sh"
 run "lua helpers"     luajit "${here}/lua_test.lua"
 

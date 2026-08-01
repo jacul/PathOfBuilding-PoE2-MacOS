@@ -49,11 +49,28 @@ git submodule update --init --recursive
 
 ```bash
 brew install cmake ninja sdl3 luajit curl zlib zstd
-tools/macos/build_app.sh   # auto-inits the submodule if needed
+tools/macos/build_app.sh           # auto-inits the submodule if needed
+tools/macos/build_app.sh --clean   # discard the build dir, configure fresh
 ```
 
 The build writes `build/macos-arm64/PathOfBuilding-PoE2.app` (the host only; it
 does not embed the Lua app).
+
+### After a Homebrew upgrade
+
+CMake caches pkg-config's answers as INTERNAL cache entries and never re-queries
+them, and luajit's `.pc` file hands out a **version-pinned Cellar path**
+(`/opt/homebrew/Cellar/luajit/2.1.<build>/include/luajit-2.1`). `brew upgrade
+luajit` deletes that directory, so the cached `-I` dangles. Clang ignores a
+missing `-I` silently, and the build then fails far from the cause with a
+misleading `use of undeclared identifier 'LUA_OK'` in `SubScript.mm`/`Host.mm`.
+
+`build_app.sh` detects the dangling paths before configuring and reconfigures
+from scratch on its own, so this should not need doing by hand — `--clean`
+forces the same thing. If you ever hit the `LUA_OK` errors, compare the `-I
+…/Cellar/luajit/…` in the failing compile line against `pkg-config --cflags
+luajit`. (`sdl3` and `zstd` are not affected; their cached paths go through the
+stable `/opt/homebrew/{include,lib,opt}` symlinks.)
 
 ## Dev run
 
@@ -65,6 +82,7 @@ mode**: the in-app updater is off and builds/settings stay in the checkout
 ```bash
 tools/macos/run_dev.sh        # build (incrementally) + launch
 tools/macos/run_dev.sh -n     # launch the existing build, skip the rebuild
+tools/macos/run_dev.sh -c     # rebuild from scratch, then launch
 ```
 
 `run_dev.sh` builds with `build_app.sh`, then `cd`s into the submodule and runs
