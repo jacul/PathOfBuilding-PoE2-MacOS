@@ -1,3 +1,8 @@
+VERSION[0.23.1-macos.15][2026/07/31]
+
+* The app is now fully self-contained — Homebrew is no longer required to run it
+* State the minimum macOS accurately (14 Sonoma); older versions were never actually supported
+
 VERSION[0.23.1-macos.14][2026/07/27]
 
 * Update the bundled Path of Building engine to v0.23.1

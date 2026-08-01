@@ -33,7 +33,7 @@
     </dict>
   </array>
   <key>CFBundleVersion</key>
-  <string>14</string>
+  <string>15</string>
   <!-- Placeholder only: package_app.sh overwrites this with the value measured
        from the finished bundle (the highest minos across the host binary and the
        bundled libraries). See docs/macos.md#minimum-macos-version. -->
