@@ -143,17 +143,19 @@ std::string stripEscapes(std::string text) {
 }
 
 SDL_FColor escapeColor(char code, SDL_FColor fallback) {
+    // SimpleGraphic color escapes specify an opaque color, even after a
+    // translucent draw (for example, the jewel preview crosshair).
     switch (code) {
-        case '0': return {0.0f, 0.0f, 0.0f, fallback.a};
-        case '1': return {1.0f, 0.0f, 0.0f, fallback.a};
-        case '2': return {0.0f, 0.7f, 0.0f, fallback.a};
-        case '3': return {0.0f, 0.35f, 1.0f, fallback.a};
-        case '4': return {1.0f, 0.85f, 0.0f, fallback.a};
-        case '5': return {0.8f, 0.0f, 1.0f, fallback.a};
-        case '6': return {0.0f, 0.8f, 1.0f, fallback.a};
-        case '7': return {1.0f, 1.0f, 1.0f, fallback.a};
-        case '8': return {0.55f, 0.55f, 0.55f, fallback.a};
-        case '9': return {0.9f, 0.55f, 0.15f, fallback.a};
+        case '0': return {0.0f, 0.0f, 0.0f, 1.0f};
+        case '1': return {1.0f, 0.0f, 0.0f, 1.0f};
+        case '2': return {0.0f, 0.7f, 0.0f, 1.0f};
+        case '3': return {0.0f, 0.35f, 1.0f, 1.0f};
+        case '4': return {1.0f, 0.85f, 0.0f, 1.0f};
+        case '5': return {0.8f, 0.0f, 1.0f, 1.0f};
+        case '6': return {0.0f, 0.8f, 1.0f, 1.0f};
+        case '7': return {1.0f, 1.0f, 1.0f, 1.0f};
+        case '8': return {0.55f, 0.55f, 0.55f, 1.0f};
+        case '9': return {0.9f, 0.55f, 0.15f, 1.0f};
         default: return fallback;
     }
 }
@@ -171,7 +173,7 @@ SDL_FColor parseColorString(const std::string& value, SDL_FColor fallback) {
                 static_cast<float>((parsed >> 16) & 0xFF) / 255.0f,
                 static_cast<float>((parsed >> 8) & 0xFF) / 255.0f,
                 static_cast<float>(parsed & 0xFF) / 255.0f,
-                fallback.a
+                1.0f
             };
         }
     }
@@ -211,7 +213,7 @@ void renderDebugTextWithEscapes(SDL_Renderer* renderer, float x, float y, const 
                         static_cast<float>((value >> 16) & 0xFF) / 255.0f,
                         static_cast<float>((value >> 8) & 0xFF) / 255.0f,
                         static_cast<float>(value & 0xFF) / 255.0f,
-                        fallback.a
+                        1.0f
                     };
                 }
                 i += 7;
