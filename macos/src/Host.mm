@@ -225,7 +225,7 @@ void renderDebugTextWithEscapes(SDL_Renderer* renderer, float x, float y, const 
     flush();
 }
 
-std::vector<TextSegment> splitTextSegments(const std::string& text, SDL_FColor fallback) {
+std::vector<TextSegment> splitTextSegments(const std::string& text, SDL_FColor fallback, SDL_FColor* finalColor = nullptr) {
     std::vector<TextSegment> segments;
     SDL_FColor color = fallback;
     std::string segment;
@@ -254,6 +254,9 @@ std::vector<TextSegment> splitTextSegments(const std::string& text, SDL_FColor f
         segment.push_back(text[i]);
     }
     flush();
+    if (finalColor) {
+        *finalColor = color;
+    }
     return segments;
 }
 
@@ -1777,6 +1780,7 @@ void Host::executeTextCommand(const DrawCommand& cmd, float scale) {
     std::istringstream lines(cmd.text);
     std::string line;
     float y = cmd.ty * scale;
+    SDL_FColor textColor = cmd.color;
     while (std::getline(lines, line)) {
         float x = cmd.tx * scale;
         const std::string cleanLine = stripEscapes(line);
@@ -1790,7 +1794,7 @@ void Host::executeTextCommand(const DrawCommand& cmd, float scale) {
         } else if (cmd.align == "RIGHT_X") {
             x = std::floor(cmd.tx * scale - lineWidth);
         }
-        for (const auto& segment : splitTextSegments(line, cmd.color)) {
+        for (const auto& segment : splitTextSegments(line, textColor, &textColor)) {
             fontRenderer.drawString(renderer, x, y, "LEFT", physHeight, cmd.font, segment.text, segment.color);
             x += static_cast<float>(fontRenderer.stringWidth(physHeight, cmd.font, segment.text));
         }
@@ -2292,6 +2296,11 @@ int Host::l_DrawString(lua_State* L) {
     cmd.height = height;
     cmd.font = std::move(font);
     cmd.text = std::move(text);
+    // Inline colors also update SimpleGraphic's drawing state. EditControl
+    // relies on this when drawing the two halves of its text around the caret,
+    // including an escape-only prefix when the caret is at the start.
+    // Update while queuing, before another command snapshots the current color.
+    splitTextSegments(cmd.text, cmd.color, &current->drawColor);
     return 0;
 }
 
