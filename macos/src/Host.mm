@@ -2530,16 +2530,31 @@ int Host::l_SetWorkDir(lua_State* L) {
     return 0;
 }
 
+namespace {
+int directoryResult(lua_State* L, bool changed, std::error_code ec, std::errc unchanged) {
+    if (changed && !ec) {
+        lua_pushboolean(L, true);
+        return 1;
+    }
+    if (!ec) ec = std::make_error_code(unchanged);
+    lua_pushnil(L);
+    pushString(L, ec.message());
+    return 2;
+}
+}
+
 int Host::l_MakeDir(lua_State* L) {
     std::error_code ec;
-    fs::create_directories(luaL_checkstring(L, 1), ec);
-    return 0;
+    const bool created = fs::create_directories(luaL_checkstring(L, 1), ec);
+    return directoryResult(L, created, ec, std::errc::file_exists);
 }
 
 int Host::l_RemoveDir(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
     std::error_code ec;
-    fs::remove_all(luaL_checkstring(L, 1), ec);
-    return 0;
+    // Only the explicitly recursive form may remove a non-empty folder.
+    const bool removed = lua_toboolean(L, 2) ? fs::remove_all(path, ec) > 0 : fs::remove(path, ec);
+    return directoryResult(L, removed, ec, std::errc::no_such_file_or_directory);
 }
 
 namespace {
