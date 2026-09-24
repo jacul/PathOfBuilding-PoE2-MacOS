@@ -40,33 +40,55 @@ add_executable(PathOfBuilding-PoE2
     "${APP_ICON}"
 )
 
-target_include_directories(PathOfBuilding-PoE2 PRIVATE
-    ${SDL3_INCLUDE_DIRS}
-    ${LUAJIT_INCLUDE_DIRS}
-    ${ZSTD_INCLUDE_DIRS}
-    src
-)
+option(POB_BUILD_TESTS "Build native engine regression tests" OFF)
+set(host_targets PathOfBuilding-PoE2)
+if(POB_BUILD_TESTS)
+    enable_testing()
+    add_executable(EngineRegressionTests
+        tests/EngineRegressionTests.mm
+        src/DdsDecode.mm
+        src/TgaImage.mm
+        src/FontRenderer.mm
+    )
+    # The regression translation unit includes Host and SubScript so it can
+    # exercise their Lua entry points and worker synchronization without a GUI.
+    target_compile_options(EngineRegressionTests PRIVATE -UNDEBUG)
+    list(APPEND host_targets EngineRegressionTests)
+    add_test(NAME engine-regressions COMMAND EngineRegressionTests
+        "${CMAKE_CURRENT_SOURCE_DIR}/../PathOfBuilding-PoE2/runtime/SimpleGraphic/Fonts")
+    set_tests_properties(engine-regressions PROPERTIES TIMEOUT 15)
+endif()
 
-target_link_directories(PathOfBuilding-PoE2 PRIVATE
-    ${SDL3_LIBRARY_DIRS}
-    ${LUAJIT_LIBRARY_DIRS}
-    ${ZSTD_LIBRARY_DIRS}
-)
+foreach(host_target IN LISTS host_targets)
+    target_include_directories(${host_target} PRIVATE
+        ${SDL3_INCLUDE_DIRS}
+        ${LUAJIT_INCLUDE_DIRS}
+        ${ZSTD_INCLUDE_DIRS}
+        src
+    )
 
-target_link_libraries(PathOfBuilding-PoE2 PRIVATE
-    ${SDL3_LIBRARIES}
-    ${LUAJIT_LIBRARIES}
-    ${ZSTD_LIBRARIES}
-    CURL::libcurl
-    ZLIB::ZLIB
-    "-framework Cocoa"
-)
+    target_link_directories(${host_target} PRIVATE
+        ${SDL3_LIBRARY_DIRS}
+        ${LUAJIT_LIBRARY_DIRS}
+        ${ZSTD_LIBRARY_DIRS}
+    )
 
-target_compile_options(PathOfBuilding-PoE2 PRIVATE
-    ${SDL3_CFLAGS_OTHER}
-    ${LUAJIT_CFLAGS_OTHER}
-    ${ZSTD_CFLAGS_OTHER}
-)
+    target_link_libraries(${host_target} PRIVATE
+        ${SDL3_LIBRARIES}
+        ${LUAJIT_LIBRARIES}
+        ${ZSTD_LIBRARIES}
+        CURL::libcurl
+        ZLIB::ZLIB
+        "-framework Cocoa"
+    )
+
+    target_compile_options(${host_target} PRIVATE
+        ${SDL3_CFLAGS_OTHER}
+        ${LUAJIT_CFLAGS_OTHER}
+        ${ZSTD_CFLAGS_OTHER}
+    )
+
+endforeach()
 
 set_target_properties(PathOfBuilding-PoE2 PROPERTIES
     MACOSX_BUNDLE TRUE

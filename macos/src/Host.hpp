@@ -46,6 +46,7 @@ public:
     int run();
 
 private:
+    friend struct EngineRegressionTests;
     static Host* current;
 
     lua_State* L = nullptr;

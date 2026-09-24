@@ -263,6 +263,18 @@ workflow (`.github/workflows/macos-release.yml`) and the build workflow
 (`macos.yml`) both run `tools/macos/tests/run.sh` before building, so a release
 fails fast if any test fails.
 
+Native rendering/input, filesystem API, and worker-shutdown regressions have
+an optional headless test target (requires the normal macOS build dependencies):
+
+```bash
+cmake -S macos -B build/macos-arm64 -G Ninja -DPOB_BUILD_TESTS=ON -DMACOS_DEV_BUILD=ON
+cmake --build build/macos-arm64
+ctest --test-dir build/macos-arm64 --output-on-failure
+```
+
+These tests use temporary folders and simulated mouse coordinates, and do not
+open a window or move the cursor. CTest enforces a timeout on shutdown checks.
+
 The upstream calculation and feature tests remain the authority for engine
 parity and run against the submodule:
 
