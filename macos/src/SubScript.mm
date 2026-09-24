@@ -129,6 +129,7 @@ struct SubScriptWorker {
 
     bool running = false;
     bool finished = false;
+    bool stopRequested = false;
     bool funcWaiting = false;
     bool subWriting = false;
     std::string errorStr;
@@ -200,14 +201,19 @@ struct SubScriptWorker {
     static int subScriptFunc(lua_State* L) {
         auto* ss = fromState(L);
         const char* name = lua_tostring(L, lua_upvalueindex(1));
-        std::unique_lock lock(ss->mutex);
-        ss->funcCall.name = name ? name : "";
-        ss->funcCall.args = buildValues(L, 1);
-        ss->funcReturns.reset();
-        ss->funcWaiting = true;
-        ss->cv.notify_all();
-        ss->cv.wait(lock, [&] { return !ss->funcWaiting || !ss->running; });
-        lock.unlock();
+        bool stopped;
+        {
+            std::unique_lock lock(ss->mutex);
+            ss->funcCall.name = name ? name : "";
+            ss->funcCall.args = buildValues(L, 1);
+            ss->funcReturns.reset();
+            ss->funcWaiting = true;
+            ss->cv.notify_all();
+            ss->cv.wait(lock, [&] { return !ss->funcWaiting || ss->stopRequested || !ss->running; });
+            stopped = ss->stopRequested;
+        }
+        // Destroy the lock before raising a Lua error (which may longjmp).
+        if (stopped) return luaL_error(L, "aborted");
         return pushValues(L, ss->funcReturns.get());
     }
 
@@ -266,6 +272,9 @@ struct SubScriptWorker {
         if (worker.joinable()) {
             {
                 std::lock_guard lock(mutex);
+                // A Lua hook cannot interrupt a worker asleep in a C callback.
+                stopRequested = true;
+                cv.notify_all();
                 if (running && L) {
                     lua_sethook(L, hookStop, LUA_MASKLINE, 0);
                 }
