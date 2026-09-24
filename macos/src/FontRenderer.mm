@@ -10,6 +10,25 @@
 #include <vector>
 
 namespace {
+// The atlas is ASCII-only, but each unsupported Unicode character must occupy
+// one placeholder and one caret step. Invalid UTF-8 consumes one byte safely.
+size_t utf8CharacterLength(const std::string& text, size_t offset) {
+    const auto lead = static_cast<unsigned char>(text[offset]);
+    const size_t length = lead >= 0xC2 && lead <= 0xDF ? 2 :
+                          lead >= 0xE0 && lead <= 0xEF ? 3 :
+                          lead >= 0xF0 && lead <= 0xF4 ? 4 : 1;
+    if (offset + length > text.size()) return 1;
+    for (size_t i = 1; i < length; ++i) {
+        if ((static_cast<unsigned char>(text[offset + i]) & 0xC0) != 0x80) return 1;
+    }
+    if (length >= 3) {
+        const auto second = static_cast<unsigned char>(text[offset + 1]);
+        if ((lead == 0xE0 && second < 0xA0) || (lead == 0xED && second >= 0xA0) ||
+            (lead == 0xF0 && second < 0x90) || (lead == 0xF4 && second >= 0x90)) return 1;
+    }
+    return length;
+}
+
 struct Glyph {
     float tcLeft = 0.0f;
     float tcRight = 0.0f;
@@ -207,12 +226,12 @@ struct FontImpl {
             }
             const unsigned char ch = static_cast<unsigned char>(text[i]);
             if (ch >= static_cast<unsigned char>(fh->numGlyph)) {
-                width += glyphAdvance(tofuFont, '?') * scale;
+                width += glyphAdvance(tofuFont, '?');
             } else {
                 width += glyphAdvance(fh, ch) * scale;
             }
             width = std::ceil(width);
-            ++i;
+            i += utf8CharacterLength(text, i);
         }
         return static_cast<int>(width);
     }
@@ -276,7 +295,7 @@ struct FontImpl {
             }
             const unsigned char ch = static_cast<unsigned char>(text[i]);
             if (ch >= static_cast<unsigned char>(fh->numGlyph)) {
-                x += glyphAdvance(tofuFont, '?') * scale;
+                x += glyphAdvance(tofuFont, '?');
             } else {
                 x += glyphAdvance(fh, ch) * scale;
             }
@@ -284,7 +303,7 @@ struct FontImpl {
             if (curX <= x) {
                 break;
             }
-            ++i;
+            i += utf8CharacterLength(text, i);
         }
         return i;
     }
@@ -406,7 +425,7 @@ struct FontImpl {
             } else {
                 drawCodepoint(renderer, currentTexture, x, y, fh, height, scale, 0, ch, color);
             }
-            ++i;
+            i += utf8CharacterLength(text, i);
         }
     }
 
