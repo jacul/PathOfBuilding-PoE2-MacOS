@@ -2531,14 +2531,13 @@ int Host::l_SetWorkDir(lua_State* L) {
 }
 
 namespace {
-int directoryResult(lua_State* L, bool changed, std::error_code ec, std::errc unchanged) {
+int directoryResult(lua_State* L, bool changed, std::error_code ec, const std::string& unchanged) {
     if (changed && !ec) {
         lua_pushboolean(L, true);
         return 1;
     }
-    if (!ec) ec = std::make_error_code(unchanged);
     lua_pushnil(L);
-    pushString(L, ec.message());
+    pushString(L, ec ? ec.message() : unchanged);
     return 2;
 }
 }
@@ -2546,7 +2545,9 @@ int directoryResult(lua_State* L, bool changed, std::error_code ec, std::errc un
 int Host::l_MakeDir(lua_State* L) {
     std::error_code ec;
     const bool created = fs::create_directories(luaL_checkstring(L, 1), ec);
-    return directoryResult(L, created, ec, std::errc::file_exists);
+    // SimpleGraphic reports an existing folder as nil, strerror(0); the
+    // settings-path popup accepts that folder by matching "No error".
+    return directoryResult(L, created, ec, "No error");
 }
 
 int Host::l_RemoveDir(lua_State* L) {
@@ -2554,7 +2555,7 @@ int Host::l_RemoveDir(lua_State* L) {
     std::error_code ec;
     // Only the explicitly recursive form may remove a non-empty folder.
     const bool removed = lua_toboolean(L, 2) ? fs::remove_all(path, ec) > 0 : fs::remove(path, ec);
-    return directoryResult(L, removed, ec, std::errc::no_such_file_or_directory);
+    return directoryResult(L, removed, ec, std::make_error_code(std::errc::no_such_file_or_directory).message());
 }
 
 namespace {

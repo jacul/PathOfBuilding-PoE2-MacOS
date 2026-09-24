@@ -42,7 +42,7 @@ struct EngineRegressionTests {
             local folder = testRoot .. '/folder'
             assert(MakeDir(folder))
             local ok, err = MakeDir(folder)
-            assert(not ok and type(err) == 'string')
+            assert(not ok and err == 'No error')
             local file = assert(io.open(folder .. '/keep.txt', 'w'))
             file:write('keep'); file:close()
             ok, err = RemoveDir(folder)
