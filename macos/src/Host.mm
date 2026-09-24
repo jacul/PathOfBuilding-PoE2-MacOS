@@ -2429,8 +2429,9 @@ int Host::l_GetCallback(lua_State* L) {
 int Host::l_GetCursorPos(lua_State* L) {
     if (current) {
         SDL_GetMouseState(&current->mouseX, &current->mouseY);
-        lua_pushnumber(L, current->mouseX);
-        lua_pushnumber(L, current->mouseY);
+        const double scale = current->dpiScaleOverride > 0.0 ? current->dpiScaleOverride / 100.0 : 1.0;
+        lua_pushnumber(L, current->mouseX / scale);
+        lua_pushnumber(L, current->mouseY / scale);
     } else {
         lua_pushinteger(L, 0);
         lua_pushinteger(L, 0);
@@ -2440,10 +2441,11 @@ int Host::l_GetCursorPos(lua_State* L) {
 
 int Host::l_SetCursorPos(lua_State* L) {
     if (current && current->window) {
+        const double scale = current->dpiScaleOverride > 0.0 ? current->dpiScaleOverride / 100.0 : 1.0;
         SDL_WarpMouseInWindow(
             current->window,
-            static_cast<float>(luaL_checknumber(L, 1)),
-            static_cast<float>(luaL_checknumber(L, 2))
+            static_cast<float>(luaL_checknumber(L, 1) * scale),
+            static_cast<float>(luaL_checknumber(L, 2) * scale)
         );
     }
     return 0;
