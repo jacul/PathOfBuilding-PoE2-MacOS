@@ -1,3 +1,11 @@
+VERSION[0.23.1-macos.16][2026/09/24]
+
+* Fix clicks and hover landing in the wrong place when a UI scaling override is set
+* Fix an error when creating, moving, or deleting folders in the build list
+* Fix colored text sometimes drawing faded, or losing its color next to the text caret
+* Fix text and caret placement around non-ASCII characters (e.g. accented letters)
+* Fix a possible hang when quitting while a background task is running
+
 VERSION[0.23.1-macos.15][2026/07/31]
 
 * The app is now fully self-contained — Homebrew is no longer required to run it
