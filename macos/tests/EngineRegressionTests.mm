@@ -36,6 +36,49 @@ struct EngineRegressionTests {
 
         char temp[] = "/tmp/pob-engine-regression-XXXXXX";
         assert(mkdtemp(temp));
+
+        // Upstream launch defaults must not override the host's code-memory
+        // settings. Exercise actual compilation beyond a 64 KiB code area,
+        // without opening a window or loading the user's application state.
+        {
+            std::ofstream launch(fs::path(temp) / "Launch.lua");
+            launch << "jit.opt.start('maxtrace=20000', 'sizemcode=64', 'maxmcode=64')\n";
+            launch.close();
+            const auto previousDirectory = fs::current_path();
+            fs::current_path(temp);
+            const int stackTop = lua_gettop(host.L);
+            assert(host.loadLaunchScript());
+            assert(lua_gettop(host.L) == stackTop);
+            fs::current_path(previousDirectory);
+            lua(R"(
+                local util = require('jit.util')
+                local flushes = 0
+                local function track(event)
+                    if event == 'flush' then flushes = flushes + 1 end
+                end
+                jit.attach(track, 'trace')
+                local functions = {}
+                for i = 1, 1200 do
+                    functions[i] = assert(loadstring('return function(n) local s = 0; '
+                        .. 'for j = 1, n do s = s + j * ' .. i .. ' end; return s end'))()
+                end
+                for i, fn in ipairs(functions) do
+                    assert(fn(100) == 5050 * i)
+                end
+                jit.attach(track)
+                local codeBytes = 0
+                for trace = 1, 20000 do
+                    if util.traceinfo(trace) then
+                        local code = util.tracemc(trace)
+                        codeBytes = codeBytes + #code
+                    end
+                end
+                assert(codeBytes > 65536, 'Compiled code must exceed the upstream test limit')
+                assert(flushes == 0, 'Code allocation must retain compiled traces')
+            )");
+            fs::remove(fs::path(temp) / "Launch.lua");
+        }
+
         lua_pushstring(host.L, temp);
         lua_setglobal(host.L, "testRoot");
         lua(R"(

@@ -1615,6 +1615,24 @@ bool Host::loadLaunchScript() {
         std::fprintf(stderr, "Launch.lua failed: %s\n", lua_tostring(L, -1));
         return false;
     }
+    // Launch.lua sets the upstream JIT defaults. Apply the platform's memory
+    // settings afterwards, before OnInit loads the application. Larger code
+    // areas avoid repeated small executable allocations and trace-cache flushes
+    // observed on Apple Silicon, without patching any upstream Lua sources.
+    const int stackTop = lua_gettop(L);
+    lua_getglobal(L, "jit");
+    lua_getfield(L, -1, "opt");
+    lua_getfield(L, -1, "start");
+    lua_pushliteral(L, "sizemcode=16384");
+    lua_pushliteral(L, "maxmcode=65536");
+    const int status = lua_pcall(L, 2, 0, 0);
+    if (status != LUA_OK) {
+        std::fprintf(stderr, "LuaJIT memory configuration failed: %s\n", lua_tostring(L, -1));
+    }
+    lua_settop(L, stackTop);
+    if (status != LUA_OK) {
+        return false;
+    }
     return true;
 }
 
