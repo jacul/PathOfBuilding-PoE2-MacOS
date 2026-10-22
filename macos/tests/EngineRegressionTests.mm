@@ -22,6 +22,162 @@ static void testWarpMouse(SDL_Window*, float x, float y) {
 #undef SDL_WarpMouseInWindow
 
 struct EngineRegressionTests {
+    static void gpuImages(const char* fonts) {
+        // No window, desktop capture, or application state: render only to an
+        // offscreen texture and inspect its pixels through SDL.
+        assert(SDL_Init(SDL_INIT_VIDEO));
+        SDL_GPUDevice* device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_MSL, true, "metal");
+        if (!device) {
+            std::fprintf(stderr, "GPU test device failed: %s\n", SDL_GetError());
+            std::abort();
+        }
+        {
+            Host host;
+            host.renderer = SDL_CreateGPURenderer(device, nullptr);
+            assert(host.renderer);
+            host.gpuImages = std::make_unique<GpuImages>(host.renderer);
+            assert(host.gpuImages->ready());
+            SDL_Texture* target = SDL_CreateTexture(host.renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, 128, 128);
+            assert(target && SDL_SetRenderTarget(host.renderer, target));
+            std::vector<ImageMipPixels> levels;
+            const SDL_Color colors[] = {{255,0,0,128}, {0,255,0,128}, {0,0,255,128}, {255,255,255,128}, {255,255,255,128}};
+            for (int i = 0, size = 64; i < 5; ++i, size /= 2) {
+                ImageMipPixels level{size, size, std::vector<unsigned char>(size * size * 4)};
+                for (size_t p = 0; p < level.rgba.size(); p += 4) {
+                    level.rgba[p] = colors[i].r; level.rgba[p+1] = colors[i].g;
+                    level.rgba[p+2] = colors[i].b; level.rgba[p+3] = colors[i].a;
+                }
+                levels.push_back(std::move(level));
+            }
+            auto image = host.gpuImages->upload(levels, 64, 64);
+            assert(image);
+            auto read = [&](int x, int y) {
+                SDL_Surface* readback = SDL_RenderReadPixels(host.renderer, nullptr);
+                assert(readback);
+                SDL_Surface* rgba = SDL_ConvertSurface(readback, SDL_PIXELFORMAT_RGBA32);
+                assert(rgba);
+                const auto* p = static_cast<unsigned char*>(rgba->pixels) + y * rgba->pitch + x * 4;
+                SDL_Color result{p[0],p[1],p[2],p[3]};
+                SDL_DestroySurface(rgba); SDL_DestroySurface(readback);
+                return result;
+            };
+            auto draw = [&](float lod, bool quad) {
+                SDL_SetRenderViewport(host.renderer, nullptr);
+                SDL_SetRenderDrawColor(host.renderer, 0, 0, 0, 255);
+                SDL_RenderClear(host.renderer);
+                const float size = 64 / std::pow(2.0f, lod + 0.5f);
+                auto& cmd = host.newDrawCommand(quad ? DrawCommand::Type::Geometry : DrawCommand::Type::Texture);
+                cmd.texture = image->texture; cmd.gpuState = image->stateForLayer(0);
+                cmd.rect = {0, 0, size, size};
+                cmd.geomTextured = true;
+                cmd.verts[0] = {{0,0},{1,1,1,1},{0,0}};
+                cmd.verts[1] = {{size,0},{1,1,1,1},{1,0}};
+                cmd.verts[2] = {{size,size},{1,1,1,1},{1,1}};
+                cmd.verts[3] = {{0,size},{1,1,1,1},{0,1}};
+                host.flushDrawCommands();
+                return read(3,3);
+            };
+            for (bool quad : {false, true}) {
+                const auto middle = draw(0.5f, quad);
+                // Interpolate red/green first, then blend transparency once.
+                assert(std::abs(int(middle.r) - 64) <= 4);
+                assert(std::abs(int(middle.g) - 64) <= 4);
+                assert(middle.b <= 2 && middle.a == 255);
+                const auto before = draw(0.99f, quad), after = draw(1.01f, quad);
+                assert(std::abs(int(before.r) - int(after.r)) <= 5);
+                assert(std::abs(int(before.g) - int(after.g)) <= 5);
+                assert(std::abs(int(before.b) - int(after.b)) <= 5);
+            }
+            // A clipped image must retain viewport-relative coordinates. A
+            // later solid command must not inherit the custom image shader.
+            SDL_SetRenderDrawBlendMode(host.renderer, SDL_BLENDMODE_BLEND);
+            auto& clipped = host.newDrawCommand(DrawCommand::Type::Texture);
+            clipped.texture = image->texture; clipped.gpuState = image->stateForLayer(0);
+            clipped.rect = {0,0,64,64}; clipped.hasViewport = true; clipped.viewport = {10,10,8,8};
+            auto& overlay = host.newDrawCommand(DrawCommand::Type::Rect);
+            overlay.rect = {12,12,2,2}; overlay.color = {0,0,1,1}; overlay.layer = 10;
+            host.flushDrawCommands();
+            assert(read(12,12).b == 255);
+            assert(read(11,11).r >= 125);
+            assert(read(20,20).r == 0);
+            image.reset();
+
+            // Non-power-of-two cells produce atlas sizes that are not valid
+            // GPU mip dimensions. Independent array layers must preserve them.
+            DecodedDds decoded;
+            decoded.cellWidth = decoded.cellHeight = 45;
+            decoded.atlasWidth = 135; decoded.atlasHeight = 45;
+            decoded.stackedAtlas = true; decoded.layerCount = decoded.atlasColumns = 3;
+            decoded.rgba.resize(135 * 45 * 4);
+            for (int y = 0; y < 45; ++y) for (int x = 0; x < 135; ++x) {
+                const int offset = (y * 135 + x) * 4;
+                decoded.rgba[offset + x / 45] = 255;
+                decoded.rgba[offset + 3] = 255;
+            }
+            NativeImage* array = createTextureFromDecodedDds(host.renderer, decoded);
+            assert(array && array->gpu);
+            host.L = luaL_newstate(); luaL_openlibs(host.L); host.registerApi();
+            lua_newtable(host.L); lua_pushlightuserdata(host.L, array);
+            lua_setfield(host.L, -2, "__native"); lua_setglobal(host.L, "array");
+            SDL_SetRenderViewport(host.renderer, nullptr);
+            SDL_SetRenderDrawColor(host.renderer, 0,0,0,255); SDL_RenderClear(host.renderer);
+            assert(luaL_dostring(host.L, R"(
+                DrawImage(array, 0,0,12,12, 1)
+                DrawImage(array, 16,0,12,12, 2)
+                DrawImageQuad(array, 32,0,44,0,44,12,32,12, 3)
+            )") == LUA_OK);
+            // Reload/unload during a frame must keep queued GPU resources alive.
+            destroyNativeImage(array);
+            host.flushDrawCommands();
+            assert(read(3,3).r == 255 && read(3,3).g == 0);
+            assert(read(19,3).g == 255 && read(19,3).b == 0);
+            assert(read(35,3).b == 255 && read(35,3).r == 0);
+
+            // Strongly minify across a rotated connector, while magnifying
+            // along it. Its alternating transparent rows must average evenly.
+            std::vector<unsigned char> stripe(64 * 64 * 4);
+            for (int y = 0; y < 64; ++y) for (int x = 0; x < 64; ++x) {
+                const int p = (y * 64 + x) * 4;
+                stripe[p] = stripe[p+1] = stripe[p+2] = 255;
+                stripe[p+3] = y % 2 ? 255 : 0;
+            }
+            NativeImage* connector = createTextureFromRgba(host.renderer, 64,64,stripe);
+            assert(connector && connector->gpu);
+            lua_newtable(host.L); lua_pushlightuserdata(host.L, connector);
+            lua_setfield(host.L, -2, "__native"); lua_setglobal(host.L, "connector");
+            SDL_SetRenderDrawColor(host.renderer, 0,0,0,255); SDL_RenderClear(host.renderer);
+            assert(luaL_dostring(host.L, "DrawImageQuad(connector, 10,10,70,70,67,73,7,13)") == LUA_OK);
+            host.flushDrawCommands();
+            for (int x = 20; x <= 50; x += 10) {
+                const auto pixel = read(x, x+3);
+                assert(pixel.r >= 118 && pixel.r <= 138);
+                assert(pixel.r == pixel.g && pixel.g == pixel.b);
+            }
+            destroyNativeImage(connector);
+
+            int assets = 0;
+            const fs::path tree = fs::path(fonts).parent_path().parent_path().parent_path() / "src/TreeData/0_5";
+            for (const auto& file : fs::directory_iterator(tree)) {
+                if (!endsWithIgnoreCase(file.path().string(), ".dds.zst")) continue;
+                NativeImage* asset = loadDdsImage(host.renderer, file.path());
+                if (!asset) {
+                    std::fprintf(stderr, "Real tree asset upload failed: %s\n", file.path().c_str());
+                    std::abort();
+                }
+                assert(asset->gpu);
+                destroyNativeImage(asset);
+                ++assets;
+            }
+            assert(assets > 0);
+            std::printf("Uploaded %d real tree DDS assets.\n", assets);
+            SDL_SetRenderTarget(host.renderer, nullptr);
+            SDL_DestroyTexture(target);
+            host.gpuImages.reset();
+            SDL_DestroyRenderer(host.renderer); host.renderer = nullptr;
+            SDL_DestroyGPUDevice(device); device = nullptr;
+        }
+        std::puts("Offscreen GPU image tests passed.");
+    }
     static void run(const char* fonts) {
         Host host;
         host.L = luaL_newstate();
@@ -201,6 +357,7 @@ struct EngineRegressionTests {
 };
 
 int main(int argc, char** argv) {
-    assert(argc == 2);
-    EngineRegressionTests::run(argv[1]);
+    assert(argc == 2 || argc == 3);
+    if (argc == 3 && std::string(argv[2]) == "--gpu") EngineRegressionTests::gpuImages(argv[1]);
+    else EngineRegressionTests::run(argv[1]);
 }

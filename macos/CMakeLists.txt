@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_ARCHITECTURES arm64 CACHE STRING "Build Apple Silicon runtime")
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL3 REQUIRED sdl3)
+pkg_check_modules(SDL3 REQUIRED sdl3>=3.4.0)
 pkg_check_modules(LUAJIT REQUIRED luajit)
 pkg_check_modules(ZSTD REQUIRED libzstd)
 
@@ -33,6 +33,7 @@ set_source_files_properties("${APP_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION "Re
 add_executable(PathOfBuilding-PoE2
     src/main.mm
     src/Host.mm
+    src/GpuImages.mm
     src/DdsDecode.mm
     src/TgaImage.mm
     src/FontRenderer.mm
@@ -47,6 +48,7 @@ if(POB_BUILD_TESTS)
     add_executable(EngineRegressionTests
         tests/EngineRegressionTests.mm
         src/DdsDecode.mm
+        src/GpuImages.mm
         src/TgaImage.mm
         src/FontRenderer.mm
     )
@@ -57,6 +59,9 @@ if(POB_BUILD_TESTS)
     add_test(NAME engine-regressions COMMAND EngineRegressionTests
         "${CMAKE_CURRENT_SOURCE_DIR}/../PathOfBuilding-PoE2/runtime/SimpleGraphic/Fonts")
     set_tests_properties(engine-regressions PROPERTIES TIMEOUT 15)
+    add_test(NAME gpu-image-regressions COMMAND EngineRegressionTests
+        "${CMAKE_CURRENT_SOURCE_DIR}/../PathOfBuilding-PoE2/runtime/SimpleGraphic/Fonts" --gpu)
+    set_tests_properties(gpu-image-regressions PROPERTIES TIMEOUT 60)
 endif()
 
 foreach(host_target IN LISTS host_targets)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FontRenderer.hpp"
+#include "GpuImages.hpp"
 #include "SubScript.hpp"
 
 #include <SDL3/SDL.h>
@@ -25,6 +26,8 @@ struct DrawCommand {
     SDL_FColor color{1.0f, 1.0f, 1.0f, 1.0f};
     SDL_FRect rect{};
     SDL_Texture* texture = nullptr;
+    SDL_GPURenderState* gpuState = nullptr;
+    std::shared_ptr<GpuImage> gpuImage;
     bool hasSrc = false;
     SDL_FRect src{};
     SDL_Vertex verts[4]{};
@@ -52,6 +55,8 @@ private:
     lua_State* L = nullptr;
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
+    std::unique_ptr<GpuImages> gpuImages;
+    std::unordered_set<void*> loadedImages;
     bool running = true;
     double dpiScaleOverride = 0.0;
     SDL_FColor drawColor = {1.0f, 1.0f, 1.0f, 1.0f};

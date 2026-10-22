@@ -50,8 +50,8 @@ constexpr const char* kRuntimePath = "__pob_runtime_path";
 
 auto startTime = std::chrono::steady_clock::now();
 
-// One level of a manually-built mipmap chain. SDL3's render API has no mipmap
-// support, so each level is its own SDL texture (level 0 == NativeImage::texture).
+// One level of the discrete mip chain retained for software rendering.
+// GPU images use a single placeholder here and sample their real array in MSL.
 struct MipLevel {
     SDL_Texture* tex = nullptr;
     int w = 0;
@@ -69,8 +69,10 @@ struct NativeImage {
     bool stackedAtlas = false;
     int layerCount = 1;
     int atlasColumns = 1;
-    // Half-size-per-step mip chain used to keep the tree smooth when zoomed out.
     std::vector<MipLevel> mips;
+    // Staging pixels exist only until the GPU upload finishes.
+    std::vector<ImageMipPixels> pixels;
+    std::shared_ptr<GpuImage> gpu;
 };
 
 struct TextSegment {
@@ -423,13 +425,34 @@ std::vector<unsigned char> downsampleRgbaHalf(const std::vector<unsigned char>& 
     return dst;
 }
 
+GpuImages* gpuImagesFor(SDL_Renderer* renderer) {
+    return static_cast<GpuImages*>(SDL_GetPointerProperty(SDL_GetRendererProperties(renderer), GpuImages::property, nullptr));
+}
+
+// Upload only after all source levels are available on the GPU path.
+bool finishImage(SDL_Renderer* renderer, NativeImage* image) {
+    if (auto* gpu = gpuImagesFor(renderer)) {
+        image->gpu = gpu->upload(image->pixels, image->cellWidth, image->cellHeight, image->layerCount, image->atlasColumns);
+        image->pixels.clear();
+        if (!image->gpu) {
+            std::fprintf(stderr, "GPU image upload failed: %s\n", SDL_GetError());
+            delete image;
+            return false;
+        }
+        image->texture = image->gpu->texture;
+        image->mips = {{image->texture, 1, 1}};
+    }
+    return true;
+}
+
 // Upload an image's base level (mip 0) and seed its mip chain with it.
 NativeImage* makeBaseImage(SDL_Renderer* renderer, int width, int height, const unsigned char* rgba) {
     if (!renderer || width <= 0 || height <= 0 || !rgba) {
         return nullptr;
     }
-    SDL_Texture* texture = uploadRgbaTexture(renderer, width, height, rgba);
-    if (!texture) {
+    const bool gpu = gpuImagesFor(renderer) != nullptr;
+    SDL_Texture* texture = gpu ? nullptr : uploadRgbaTexture(renderer, width, height, rgba);
+    if (!gpu && !texture) {
         return nullptr;
     }
     auto* image = new NativeImage();
@@ -441,23 +464,59 @@ NativeImage* makeBaseImage(SDL_Renderer* renderer, int width, int height, const 
     image->cellWidth = width;
     image->cellHeight = height;
     image->mips.push_back({texture, width, height});
+    if (gpu) image->pixels.push_back({width, height, std::vector<unsigned char>(rgba, rgba + static_cast<size_t>(width) * height * 4)});
     return image;
 }
 
 // Build a half-size-per-step mip chain on the CPU from the base RGBA. Used when
 // the source has no usable mip chain of its own (PNG, TGA, mip-less DDS).
 void appendCpuMipChain(SDL_Renderer* renderer, NativeImage* image, const std::vector<unsigned char>& base, int width, int height) {
+    if (image->layerCount > 1) {
+        const int columns = image->atlasColumns;
+        const int rows = (image->layerCount + columns - 1) / columns;
+        int cw = image->cellWidth, ch = image->cellHeight;
+        std::vector<std::vector<unsigned char>> cells(image->layerCount);
+        for (int layer = 0; layer < image->layerCount; ++layer) {
+            cells[layer].resize(static_cast<size_t>(cw) * ch * 4);
+            for (int y = 0; y < ch; ++y) {
+                const size_t src = (static_cast<size_t>((layer / columns) * ch + y) * width + (layer % columns) * cw) * 4;
+                std::memcpy(cells[layer].data() + static_cast<size_t>(y) * cw * 4, base.data() + src, cw * 4);
+            }
+        }
+        // DDS arrays without embedded mips still need independent cell filtering.
+        while (cw / 2 >= 4 && ch / 2 >= 4) {
+            int nw = 0, nh = 0;
+            for (auto& cell : cells) cell = downsampleRgbaHalf(cell, cw, ch, nw, nh);
+            const int aw = columns * nw, ah = rows * nh;
+            std::vector<unsigned char> packed(static_cast<size_t>(aw) * ah * 4);
+            for (int layer = 0; layer < image->layerCount; ++layer) {
+                for (int y = 0; y < nh; ++y) {
+                    const size_t dst = (static_cast<size_t>((layer / columns) * nh + y) * aw + (layer % columns) * nw) * 4;
+                    std::memcpy(packed.data() + dst, cells[layer].data() + static_cast<size_t>(y) * nw * 4, nw * 4);
+                }
+            }
+            const bool gpu = gpuImagesFor(renderer) != nullptr;
+            SDL_Texture* mip = gpu ? nullptr : uploadRgbaTexture(renderer, aw, ah, packed.data());
+            if (!gpu && !mip) break;
+            image->mips.push_back({mip, aw, ah});
+            if (gpu) image->pixels.push_back({aw, ah, std::move(packed)});
+            cw = nw; ch = nh;
+        }
+        return;
+    }
     std::vector<unsigned char> level = base;
     int lw = width;
     int lh = height;
     while (lw > 1 || lh > 1) {
         int nw = 0, nh = 0;
         std::vector<unsigned char> next = downsampleRgbaHalf(level, lw, lh, nw, nh);
-        SDL_Texture* mip = uploadRgbaTexture(renderer, nw, nh, next.data());
-        if (!mip) {
+        const bool gpu = gpuImagesFor(renderer) != nullptr;
+        SDL_Texture* mip = gpu ? nullptr : uploadRgbaTexture(renderer, nw, nh, next.data());
+        if (!gpu && !mip) {
             break;
         }
         image->mips.push_back({mip, nw, nh});
+        if (gpu) image->pixels.push_back({nw, nh, next});
         level = std::move(next);
         lw = nw;
         lh = nh;
@@ -473,12 +532,16 @@ NativeImage* createTextureFromRgba(SDL_Renderer* renderer, int width, int height
         return nullptr;
     }
     appendCpuMipChain(renderer, image, rgba, width, height);
-    return image;
+    return finishImage(renderer, image) ? image : nullptr;
 }
 
 // Free an image and every texture in its mip chain (level 0 == ->texture).
 void destroyNativeImage(NativeImage* image) {
     if (!image) {
+        return;
+    }
+    if (image->gpu) {
+        delete image;
         return;
     }
     if (image->mips.empty() && image->texture) {
@@ -501,24 +564,6 @@ NativeImage* createTextureFromDecodedDds(SDL_Renderer* renderer, const DecodedDd
         return nullptr;
     }
 
-    if (!decoded.mipLevels.empty()) {
-        // Prefer the file's own mip chain: for texture-array atlases it is
-        // filtered per layer, so it doesn't bleed across cell seams the way a
-        // CPU downscale of the packed atlas would.
-        for (const DecodedDdsMip& lvl : decoded.mipLevels) {
-            if (lvl.rgba.empty() || lvl.width <= 0 || lvl.height <= 0) {
-                break;
-            }
-            SDL_Texture* mip = uploadRgbaTexture(renderer, lvl.width, lvl.height, lvl.rgba.data());
-            if (!mip) {
-                break;
-            }
-            image->mips.push_back({mip, lvl.width, lvl.height});
-        }
-    } else {
-        appendCpuMipChain(renderer, image, decoded.rgba, decoded.atlasWidth, decoded.atlasHeight);
-    }
-
     if (decoded.stackedAtlas) {
         image->width = decoded.cellWidth;
         image->height = decoded.cellHeight;
@@ -528,7 +573,28 @@ NativeImage* createTextureFromDecodedDds(SDL_Renderer* renderer, const DecodedDd
         image->layerCount = std::max(1, decoded.layerCount);
         image->atlasColumns = std::max(1, decoded.atlasColumns);
     }
-    return image;
+
+    if (!decoded.mipLevels.empty()) {
+        // Prefer the file's own mip chain: for texture-array atlases it is
+        // filtered per layer, so it doesn't bleed across cell seams the way a
+        // CPU downscale of the packed atlas would.
+        for (const DecodedDdsMip& lvl : decoded.mipLevels) {
+            if (lvl.rgba.empty() || lvl.width <= 0 || lvl.height <= 0) {
+                break;
+            }
+            const bool gpu = gpuImagesFor(renderer) != nullptr;
+            SDL_Texture* mip = gpu ? nullptr : uploadRgbaTexture(renderer, lvl.width, lvl.height, lvl.rgba.data());
+            if (!gpu && !mip) {
+                break;
+            }
+            image->mips.push_back({mip, lvl.width, lvl.height});
+            if (gpu) image->pixels.push_back({lvl.width, lvl.height, lvl.rgba});
+        }
+    } else {
+        appendCpuMipChain(renderer, image, decoded.rgba, decoded.atlasWidth, decoded.atlasHeight);
+    }
+
+    return finishImage(renderer, image) ? image : nullptr;
 }
 
 bool endsWithIgnoreCase(const std::string& value, const std::string& suffix) {
@@ -623,13 +689,13 @@ void cellUvToAtlas(NativeImage* image, int stackLayer, float uvS, float uvT, flo
     outT = (oy + uvT * static_cast<float>(image->cellHeight)) / atlasH;
 }
 
-// Mip LOD tuning. SDL3's renderer can't do trilinear/anisotropic filtering, so
-// we snap to a single level (GL_LINEAR_MIPMAP_NEAREST). Without GPU help, the
+// Software-renderer fallback: snap to one level (GL_LINEAR_MIPMAP_NEAREST).
+// The application GPU path handles LOD and anisotropy in its sampler. The
 // honest isotropic LOD (max of the per-axis minification) over-blurs thin orbit
 // connectors until they vanish, and steps levels early so the change "pops".
 // kMipLodBias keeps the texture this many LOD steps sharper, trading a little
 // aliasing for steadier lines and gentler transitions — raise it for more
-// smoothing, lower it (toward 0) for more sharpness.
+// detail, lower it (toward 0) for more smoothing.
 constexpr float kMipLodBias = 0.5f;
 
 // Collapse the two per-axis minification factors into one. The geometric mean
@@ -963,6 +1029,10 @@ Host::~Host() {
     if (L) {
         lua_close(L);
     }
+    drawCommands.clear();
+    for (void* image : loadedImages) destroyNativeImage(static_cast<NativeImage*>(image));
+    loadedImages.clear();
+    gpuImages.reset();
     if (renderer) {
         SDL_DestroyRenderer(renderer);
     }
@@ -1744,6 +1814,7 @@ void Host::flushDrawCommands() {
         } else {
             SDL_SetRenderViewport(renderer, nullptr);
         }
+        if (gpuImages) SDL_SetGPURenderState(renderer, cmd.gpuState);
         switch (cmd.type) {
             case DrawCommand::Type::Rect: {
                 SDL_FRect r{cmd.rect.x * scale, cmd.rect.y * scale, cmd.rect.w * scale, cmd.rect.h * scale};
@@ -1780,6 +1851,7 @@ void Host::flushDrawCommands() {
                 break;
         }
     }
+    if (gpuImages) SDL_SetGPURenderState(renderer, nullptr);
     drawCommands.clear();
 }
 
@@ -2035,7 +2107,15 @@ int Host::l_RenderInit(lua_State*) {
                 SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr)) {
             [nsWindow setFrameAutosaveName:@"PoB2MainWindow"];
         }
-        current->renderer = SDL_CreateRenderer(current->window, nullptr);
+        SDL_PropertiesID props = SDL_CreateProperties();
+        SDL_SetStringProperty(props, SDL_PROP_RENDERER_CREATE_NAME_STRING, "gpu");
+        SDL_SetPointerProperty(props, SDL_PROP_RENDERER_CREATE_WINDOW_POINTER, current->window);
+        SDL_SetBooleanProperty(props, SDL_PROP_RENDERER_CREATE_GPU_SHADERS_MSL_BOOLEAN, true);
+        current->renderer = SDL_CreateRendererWithProperties(props);
+        SDL_DestroyProperties(props);
+        if (!current->renderer) return luaL_error(current->L, "GPU renderer initialization failed: %s", SDL_GetError());
+        current->gpuImages = std::make_unique<GpuImages>(current->renderer);
+        if (!current->gpuImages->ready()) return luaL_error(current->L, "GPU image shader initialization failed: %s", SDL_GetError());
         // Enable alpha blending for solid fills and geometry (tooltip/popup
         // backgrounds and dimming overlays rely on translucent draws).
         SDL_SetRenderDrawBlendMode(current->renderer, SDL_BLENDMODE_BLEND);
@@ -2198,7 +2278,7 @@ int Host::l_DrawImage(lua_State* L) {
         const float rhoY = dstPxH > 0.0f ? srcPxH / dstPxH : 0.0f;
         const int level = selectMipLevel(image, anisoRho(rhoX, rhoY));
         const MipLevel& mip = image->mips[level];
-        if (hasSrc && level > 0) {
+        if (hasSrc && (level > 0 || image->gpu)) {
             const float rx = static_cast<float>(mip.w) / image->atlasWidth;
             const float ry = static_cast<float>(mip.h) / image->atlasHeight;
             src.x *= rx;
@@ -2207,9 +2287,13 @@ int Host::l_DrawImage(lua_State* L) {
             src.h *= ry;
         }
 
+        SDL_GPURenderState* state = image->gpu ? image->gpu->stateForLayer(stackLayer) : nullptr;
+        if (image->gpu && !state) return luaL_error(L, "GPU image layer initialization failed: %s", SDL_GetError());
         DrawCommand& cmd = current->newDrawCommand(DrawCommand::Type::Texture);
         cmd.rect = rect;
         cmd.texture = mip.tex;
+        cmd.gpuImage = image->gpu;
+        cmd.gpuState = state;
         cmd.hasSrc = hasSrc;
         cmd.src = src;
         return 0;
@@ -2284,9 +2368,13 @@ int Host::l_DrawImageQuad(lua_State* L) {
         const float rhoV = lenV > 0.0f ? texV / lenV : 0.0f;
         const int level = selectMipLevel(image, anisoRho(rhoU, rhoV));
 
+        SDL_GPURenderState* state = image->gpu ? image->gpu->stateForLayer(stackLayer) : nullptr;
+        if (image->gpu && !state) return luaL_error(L, "GPU image layer initialization failed: %s", SDL_GetError());
         DrawCommand& cmd = current->newDrawCommand(DrawCommand::Type::Geometry);
         std::memcpy(cmd.verts, vertices, sizeof(vertices));
         cmd.texture = image->mips[level].tex;
+        cmd.gpuImage = image->gpu;
+        cmd.gpuState = state;
         cmd.geomTextured = true;
     } else if (!requestedImage) {
         DrawCommand& cmd = current->newDrawCommand(DrawCommand::Type::Geometry);
@@ -2378,6 +2466,7 @@ int Host::l_NewImageHandle(lua_State* L) {
     lua_pushcfunction(L, [](lua_State* L) -> int {
         NativeImage* existing = imageFromLua(L, 1);
         if (existing) {
+            if (current) current->loadedImages.erase(existing);
             destroyNativeImage(existing);
             lua_pushnil(L);
             lua_setfield(L, 1, "__native");
@@ -2386,6 +2475,7 @@ int Host::l_NewImageHandle(lua_State* L) {
         std::string fileName = luaString(L, 2);
         NativeImage* image = current ? loadNativeImage(L, current->renderer, fileName) : nullptr;
         if (image) {
+            current->loadedImages.insert(image);
             lua_pushlightuserdata(L, image);
             lua_setfield(L, 1, "__native");
         } else {
@@ -2400,6 +2490,7 @@ int Host::l_NewImageHandle(lua_State* L) {
     lua_pushcfunction(L, [](lua_State* L) -> int {
         NativeImage* existing = imageFromLua(L, 1);
         if (existing) {
+            if (current) current->loadedImages.erase(existing);
             destroyNativeImage(existing);
         }
         lua_pushnil(L);

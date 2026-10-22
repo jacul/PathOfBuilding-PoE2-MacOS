@@ -43,7 +43,7 @@ git submodule update --init --recursive
 
 - Apple Silicon Mac
 - macOS 14 or newer
-- `git`, and Homebrew packages: `cmake`, `ninja`, `sdl3`, `luajit`, `curl`, `zlib`, `zstd`
+- `git`, and Homebrew packages: `cmake`, `ninja`, `sdl3` (3.4.0 or later), `luajit`, `curl`, `zlib`, `zstd`
 
 ## Build
 
@@ -310,61 +310,52 @@ and popups land on top regardless of the order the application issued them.
 
 ### Image textures and mipmaps
 
-Every image (DDS / `.dds.zst`, PNG via Cocoa, TGA) is decoded to RGBA and
-uploaded as a base texture in `macos/src/Host.mm`. SDL3's renderer has **no
-mipmap, trilinear, or anisotropic-filtering support** and samples a single level
-with bilinear filtering, so a heavily minified texture — the atlas/passive tree
-zoomed out — aliases into jagged lines and node art.
+The native host uses SDL 3.4's GPU renderer on Metal.
+It keeps the existing SDL draw queue, viewport handling, bitmap fonts, and Lua API.
+`macos/src/GpuImages.mm` supplies a custom fragment shader through SDL's GPU render state API.
+This uses the supported extension points, without modifying SDL or upstream Lua.
 
-To compensate, each image carries a **mipmap chain** of successively half-size
-`SDL_Texture`s, sourced one of two ways:
+Each image uses a real mipmapped GPU texture array, including ordinary images with one layer.
+DDS files supply their embedded mip levels when available.
+PNG, TGA, and mip-less DDS images use an alpha-weighted CPU box filter.
+For DDS arrays, both paths filter and upload each sprite layer independently.
+This prevents adjacent sprites from bleeding into each other.
+It also supports non-power-of-two cells, whose packed atlas levels cannot form a standard GPU mip chain.
 
-- **DDS files: their own embedded mip chain.** The PoB tree art ships full mip
-  chains, and the node-art sheets are DDS *texture arrays* (e.g.
-  `skills_128_128_BC1` is 329 layers). `DdsDecode` decodes each level straight
-  from the file and re-packs it into a grid atlas — crucially **per layer**, so
-  unlike a CPU downscale of the already-packed atlas it does **not** bleed across
-  the unpadded cell seams. Every cell at a level shares the same size, so the
-  grid's normalized boundaries stay put and the host's UV math is unchanged.
-- **Everything else: a CPU chain.** PNG (the orbit/connector art) and TGA have no
-  embedded mips, and the rare mip-less DDS falls back here too — successive
-  half-size copies via an alpha-weighted box filter (so transparent texels don't
-  bleed dark colour into edges). Single images, so there are no cell seams to
-  bleed across.
+A trilinear sampler continuously blends adjacent mip levels before alpha compositing.
+The sampler enables 8× anisotropic filtering for thin and rotated connectors.
+The shader applies a `-0.5` LOD bias to retain detail.
+Metal ignores the sampler's LOD bias field, so this adjustment belongs in the shader.
+The coarsest sampled level retains the previous minimum cell size of approximately four pixels.
 
-Per draw, `selectMipLevel` picks a level from the on-screen minification
-(`floor(log2 ρ)`) and samples that smaller texture — `DrawImage` rescales its
-source rect, `DrawImageQuad` keeps its normalized UVs. The whole chain is freed
-on `Load`/`Unload`.
+SDL queues image geometry using a one-pixel placeholder texture.
+The custom shader samples the separate mipmapped array with the original atlas UV coordinates.
+Each sprite layer has immutable shader uniforms, so queued draws retain their selected layer.
+Solid fills and text use SDL's standard shaders.
+Draw commands retain their GPU image until replay, including when Lua unloads or reloads the image during that frame.
+The host releases remaining image resources before destroying the renderer at shutdown.
 
-Two knobs in `macos/src/Host.mm` approximate the filtering SDL3 can't do:
+The software renderer retains the previous discrete-level fallback for native tests.
+The application requires SDL 3.4.0 or later; CMake checks this requirement.
 
-- **`anisoRho`** collapses the two per-axis minification factors with a geometric
-  mean (area scale) instead of the max, so a long-but-thin orbit connector stays
-  sharp instead of being blurred away — a stand-in for anisotropic filtering.
-- **`kMipLodBias`** (default `0.5`) keeps the chosen level this many LOD steps
-  sharper. Raise it for more smoothing, lower it toward `0` for more sharpness;
-  it is the single tuning constant. After changing it, rebuild with
-  `cmake --build build/macos-arm64`.
+References:
 
-The coarsest level the host samples is a ~4px cell (`selectMipLevel`) — below
-that a sprite is too small on screen to matter — so the embedded DDS chain is
-decoded only that far. The CPU fallback builds its full chain down to 1px and
-simply never samples past the cap.
+- [SDL GPU render states](https://wiki.libsdl.org/SDL3/SDL_CreateGPURenderState)
+- [SDL GPU renderer, including offscreen rendering](https://wiki.libsdl.org/SDL3/SDL_CreateGPURenderer)
+- [SDL sampler settings and Metal LOD bias](https://wiki.libsdl.org/SDL3/SDL_GPUSamplerCreateInfo)
 
-### Known limitations and future work
+### Rendering regression checks
 
-- **Popping when zooming.** Level selection is discrete (equivalent to
-  `GL_LINEAR_MIPMAP_NEAREST`), so a feature can visibly "pop" as the zoom crosses
-  a level boundary. The Windows SimpleGraphic/OpenGL renderer avoids this with
-  **trilinear** filtering (a continuous blend between two levels) plus anisotropic
-  filtering. Matching it needs a GPU path SDL3's 2D renderer doesn't expose:
-  porting the tree draw to **`SDL_GPU`** (real mipmapped textures + a
-  trilinear/anisotropic sampler in a shader) is the way to remove popping
-  entirely. That is a rendering rewrite, not a tweak — tracked here as the
-  intended future enhancement. A two-pass alpha-blend fake-trilinear was
-  considered and rejected: compositing two semi-transparent levels is not a true
-  lerp and looks worse on the transparent connector art.
+With `POB_BUILD_TESTS=ON`, CTest provides two native suites:
+
+- `engine-regressions`: existing host compatibility checks, without video initialization.
+- `gpu-image-regressions`: Metal rendering into an offscreen texture, without creating a window.
+
+The GPU suite checks continuous mip transitions, transparency, rectangles, quads, viewport clipping, and draw order.
+It also checks sprite isolation, non-power-of-two cells, unloading queued images, and current tree DDS uploads.
+These checks inspect generated pixels and local assets, without reading the live desktop or user builds.
+SDL video initialization still needs access to macOS graphics services outside restricted sandboxes.
+Interactive zoom quality and frame timing need a separate manual check.
 
 ## Runtime behaviour
 
