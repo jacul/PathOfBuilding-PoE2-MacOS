@@ -1,3 +1,8 @@
+VERSION[0.23.1-macos.17][2026/10/24]
+
+* Much faster gem selection and recalculation — sorting support gems by DPS is up to 7× faster
+* Smoother passive tree zooming, with no more "popping" as detail levels change
+
 VERSION[0.23.1-macos.16][2026/09/24]
 
 * Fix clicks and hover landing in the wrong place when a UI scaling override is set
