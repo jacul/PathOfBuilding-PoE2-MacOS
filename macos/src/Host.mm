@@ -853,8 +853,7 @@ NativeImage* loadTgaImage(SDL_Renderer* renderer, const fs::path& path) {
     return createTextureFromRgba(renderer, width, height, rgba);
 }
 
-NativeImage* loadNativeImage(lua_State* L, SDL_Renderer* renderer, const std::string& fileName) {
-    fs::path path = resolveAssetPath(L, fileName);
+NativeImage* loadNativeImage(SDL_Renderer* renderer, const fs::path& path) {
     const std::string pathString = path.string();
     if (endsWithIgnoreCase(pathString, ".dds.zst") || endsWithIgnoreCase(pathString, ".dds")) {
         return loadDdsImage(renderer, path);
@@ -867,7 +866,7 @@ NativeImage* loadNativeImage(lua_State* L, SDL_Renderer* renderer, const std::st
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp") {
         return loadCocoaImage(renderer, path);
     }
-    std::fprintf(stderr, "Unsupported image format: %s\n", fileName.c_str());
+    std::fprintf(stderr, "Unsupported image format: %s\n", pathString.c_str());
     return nullptr;
 }
 
@@ -2541,23 +2540,35 @@ int Host::l_NewImageHandle(lua_State* L) {
     lua_pushcfunction(L, [](lua_State* L) -> int {
         auto* owner = imageOwnerFromLua(L, 1);
         if (!owner) return luaL_error(L, "Invalid image handle");
-        owner->reset();
 
         std::string fileName = luaString(L, 2);
-        NativeImage* image = current ? loadNativeImage(L, current->renderer, fileName) : nullptr;
-        if (image) {
-            Host* host = current;
-            host->loadedImages.insert(image);
-            ++host->imageLoads;
-            *owner = ImageOwner(image, [host](NativeImage* image) {
-                host->loadedImages.erase(image);
-                ++host->imageReleases;
-                destroyNativeImage(image);
-            });
-        } else {
-            std::fprintf(stderr, "Failed to load image: %s\n", fileName.c_str());
+        ImageOwner image;
+        if (Host* host = current) {
+            // As in SimpleGraphic, handles that load the same file share one
+            // image, so per-frame handles awaiting collection hold no copies.
+            const std::string path = resolveAssetPath(L, fileName).string();
+            if (auto cached = host->imageCache.find(path); cached != host->imageCache.end()) {
+                image = std::static_pointer_cast<NativeImage>(cached->second.lock());
+            }
+            if (!image) {
+                if (NativeImage* loaded = loadNativeImage(host->renderer, path)) {
+                    host->loadedImages.insert(loaded);
+                    ++host->imageLoads;
+                    image = ImageOwner(loaded, [host, path](NativeImage* image) {
+                        auto cached = host->imageCache.find(path);
+                        if (cached != host->imageCache.end() && cached->second.expired()) host->imageCache.erase(cached);
+                        host->loadedImages.erase(image);
+                        ++host->imageReleases;
+                        destroyNativeImage(image);
+                    });
+                    host->imageCache[path] = image;
+                }
+            }
         }
-        lua_pushboolean(L, image != nullptr);
+        if (!image) std::fprintf(stderr, "Failed to load image: %s\n", fileName.c_str());
+        // Replace last, so reloading a handle's own file keeps its image.
+        *owner = std::move(image);
+        lua_pushboolean(L, *owner != nullptr);
         lua_setfield(L, 1, "valid");
         return 0;
     });

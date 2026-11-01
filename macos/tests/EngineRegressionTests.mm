@@ -29,20 +29,23 @@ struct EngineRegressionTests {
         assert(surface);
         char temp[] = "/tmp/pob-image-lifetime-XXXXXX";
         assert(mkdtemp(temp));
-        const fs::path path = fs::path(temp) / "image.tga";
-        {
+        auto writeTga = [&](const char* name, char value) {
+            const fs::path path = fs::path(temp) / name;
             const unsigned char header[18] = {0,0,2,0,0,0,0,0,0,0,0,0,4,0,4,0,32,32};
-            const std::string pixels(4 * 4 * 4, '\xff');
+            const std::string pixels(4 * 4 * 4, value);
             std::ofstream file(path, std::ios::binary);
             file.write(reinterpret_cast<const char*>(header), sizeof(header));
             file.write(pixels.data(), pixels.size());
-        }
+            return path;
+        };
+        const fs::path path = writeTga("image.tga", '\xff'), other = writeTga("other.tga", '\0');
         {
             Host host;
             host.renderer = SDL_CreateSoftwareRenderer(surface);
             assert(host.renderer);
             host.L = luaL_newstate(); luaL_openlibs(host.L); host.registerApi();
             lua_pushstring(host.L, path.c_str()); lua_setglobal(host.L, "imagePath");
+            lua_pushstring(host.L, other.c_str()); lua_setglobal(host.L, "otherPath");
             auto lua = [&](const char* code) {
                 if (luaL_dostring(host.L, code) != LUA_OK) {
                     std::fprintf(stderr, "%s\n", lua_tostring(host.L, -1));
@@ -54,11 +57,20 @@ struct EngineRegressionTests {
                 std::fprintf(stderr, "image-lifetime: discarded=%d live=%zu\n", batch * 100, host.loadedImages.size());
             }
             assert(host.loadedImages.empty());
+            // As in SimpleGraphic, handles loading one file share its image,
+            // and reloading the file a handle already holds keeps it.
+            const auto loads = host.imageLoads;
+            lua("a=NewImageHandle(); a:Load(imagePath); b=NewImageHandle(); b:Load(imagePath); b:Load(imagePath)");
+            assert(host.imageLoads == loads + 1 && host.loadedImages.size() == 1);
+            lua("a=nil; collectgarbage('collect')");
+            assert(host.loadedImages.size() == 1);
+            lua("b=nil; collectgarbage('collect')");
+            assert(host.loadedImages.empty() && host.imageCache.empty());
             // A draw must own its image through collection, reload, and unload.
             for (const char* draw : {"DrawImage(h,0,0,4,4)", "DrawImageQuad(h,0,0,4,0,4,4,0,4)"}) {
                 lua("h=NewImageHandle(); h:Load(imagePath)");
                 lua(draw);
-                lua("h:Load(imagePath); h:Unload(); h:Unload(); h=nil; collectgarbage('collect')");
+                lua("h:Load(otherPath); h:Unload(); h:Unload(); h=nil; collectgarbage('collect')");
                 assert(host.loadedImages.size() == 1);
                 host.flushDrawCommands();
                 assert(SDL_RenderPresent(host.renderer));
@@ -74,7 +86,7 @@ struct EngineRegressionTests {
             lua_close(host.L); host.L = nullptr;
             assert(host.drawCommands.size() == 1);
             host.drawCommands.clear();
-            assert(host.loadedImages.empty());
+            assert(host.loadedImages.empty() && host.imageCache.empty());
         }
         SDL_DestroySurface(surface);
         fs::remove_all(temp);

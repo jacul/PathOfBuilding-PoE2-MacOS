@@ -5,7 +5,9 @@
 #include "SubScript.hpp"
 
 #include <SDL3/SDL.h>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -59,6 +61,8 @@ private:
     SDL_Renderer* renderer = nullptr;
     std::unique_ptr<GpuImages> gpuImages;
     std::unordered_set<void*> loadedImages;
+    // Resolved path -> live image, shared by every handle that loads it.
+    std::unordered_map<std::string, std::weak_ptr<void>> imageCache;
     bool memoryDiagnostics = false;
     unsigned long long imageLoads = 0, imageReleases = 0;
     void reportMemory(const char* phase);
