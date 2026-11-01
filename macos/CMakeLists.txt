@@ -94,6 +94,10 @@ foreach(host_target IN LISTS host_targets)
         ${SDL3_CFLAGS_OTHER}
         ${LUAJIT_CFLAGS_OTHER}
         ${ZSTD_CFLAGS_OTHER}
+        # The SDK is newer than the deployment target (the app's minimum macOS,
+        # passed in by build_app.sh), so an unguarded call to a newer API would
+        # compile and then fail at runtime on older systems. Refuse it here.
+        -Werror=unguarded-availability-new
     )
 
 endforeach()

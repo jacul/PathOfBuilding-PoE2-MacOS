@@ -82,7 +82,8 @@ Watching the release workflow afterwards is manual (Actions tab).
 
 Pushing a tag matching `v*-macos.*` triggers the **macOS release** workflow
 (`.github/workflows/macos-release.yml`), which verifies the tag matches
-`Info.plist`, builds + packages on an Apple Silicon runner, and publishes the
+`Info.plist`, builds the bundled libraries for macOS 14 and packages on an Apple
+Silicon runner, checks the package still runs on macOS 14, and publishes the
 `.zip` + `.zip.sha256` to a new GitHub Release with install/verify notes.
 
 Before tagging, add a `VERSION[<engine>-macos.<build>][YYYY/MM/DD]` entry at the
@@ -117,7 +118,11 @@ Net: one build per release. (If you push `develop` *before* the tag, the gate
 won't see the tag yet and you'll get a redundant develop build — push the tag
 in the same command.)
 
-You can also run the workflow from the Actions tab against an existing tag.
+You can also run the workflow from the Actions tab against an existing tag. Run
+it from `develop`: the steps come from the branch you run it on and the app from
+the tag, so this is also how a tag cut before a workflow change gets built (for
+example after a runner image is retired). The library build and the
+minimum-macOS check are taken from the branch too, since older tags lack them.
 
 ### Manual build (optional, local)
 
@@ -131,6 +136,12 @@ You can also run the workflow from the Actions tab against an existing tag.
    `runtime-macos-arm64/`, and writes the release artifact
    `dist/macos-arm64/PathOfBuilding-PoE2-macos-arm64.zip` along with its
    checksum `dist/macos-arm64/PathOfBuilding-PoE2-macos-arm64.zip.sha256`.
+
+   To publish it, build against `tools/macos/build_deps.sh` output first and
+   confirm with `tools/macos/check_min_macos.sh` (see
+   [docs/macos.md](docs/macos.md#minimum-macos-version)). Packaged against
+   Homebrew's libraries it needs this Mac's macOS, and the updater in builds up
+   to 18 would install it on older Macs where it can't open.
 3. The packaging step tags the shipped `manifest.xml`'s `<Version>` with
    `platform="macos-arm64"` so the app runs as a release (not Dev Mode) and stores
    user data under `~/Library/Application Support/Path of Building (PoE2)/`.

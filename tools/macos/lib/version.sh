@@ -16,6 +16,13 @@ version_engine_from_plist() {
   awk '/CFBundleShortVersionString/{getline; gsub(/[^0-9.]/,"",$0); print $0; exit}' "$1"
 }
 
+# version_min_macos_from_plist <Info.plist(.in)> -> prints LSMinimumSystemVersion
+# In macos/Info.plist.in this is the floor the app is built for: build_app.sh and
+# build_deps.sh compile for it, and check_min_macos.sh holds the package to it.
+version_min_macos_from_plist() {
+  awk '/<key>LSMinimumSystemVersion<\/key>/{getline; gsub(/[^0-9.]/,"",$0); print $0; exit}' "$1"
+}
+
 # version_engine_from_manifest <manifest.xml> -> prints the <Version number="…"/>
 version_engine_from_manifest() {
   grep -m1 '<Version' "$1" | sed -E 's/.*number="([^"]+)".*/\1/'

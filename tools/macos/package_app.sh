@@ -167,10 +167,12 @@ echo "Third-party notices: $(ls "${resources}/licenses" | tr '\n' ' ')"
 
 # Declare the minimum macOS the artifact actually runs on, rather than the one we
 # would like it to. The floor is the highest LC_BUILD_VERSION among the host
-# binary and the bundled libraries, and the libraries are Homebrew bottles built
-# on (and targeted at) whatever machine produced them — so the release builder's
-# OS sets it. Writing the measured value means LSMinimumSystemVersion cannot
-# drift into a promise the download does not keep: users on an older macOS get
+# binary and the bundled libraries. The host is compiled for the floor declared
+# in macos/Info.plist.in, but the libraries target whatever their builder chose:
+# tools/macos/build_deps.sh output (what CI links, via PKG_CONFIG_PATH) matches
+# the declared floor, while Homebrew bottles target the Mac they were built for.
+# Writing the measured value means LSMinimumSystemVersion cannot drift into a
+# promise the download does not keep: users on an older macOS get
 # LaunchServices' "requires macOS X" refusal instead of a dyld crash.
 shopt -s nullglob
 min_os="$(bundle_libs_min_os \
@@ -184,6 +186,12 @@ fi
 /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion ${min_os}" \
   "${app_dst}/Contents/Info.plist"
 echo "Minimum macOS: ${min_os} (measured from the built bundle)"
+declared_min_os="$(version_min_macos_from_plist "${plist}")"
+if [[ "${min_os}" != "${declared_min_os}" ]]; then
+  echo "note: this bundle needs macOS ${min_os}, above the app's floor of ${declared_min_os}:" >&2
+  echo "      a bundled library targets a newer macOS (Homebrew bottles target this Mac)." >&2
+  echo "      Fine for local testing; releases bundle tools/macos/build_deps.sh output." >&2
+fi
 
 # Sign the bundle now that its Frameworks and Resources are final. The load
 # commands were rewritten above, which invalidates the linker's ad-hoc signature;

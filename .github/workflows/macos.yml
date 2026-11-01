@@ -32,20 +32,31 @@ jobs:
   build_macos:
     needs: gate
     if: needs.gate.outputs.release_tagged != 'true'
-    runs-on: macos-14
+    # The runner's macOS does not set the app's minimum: the bundled libraries
+    # are built from source for that minimum instead of coming from Homebrew
+    # bottles, and the package is checked against it. See docs/macos.md.
+    runs-on: macos-26
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Install dependencies
-        run: brew install cmake ninja sdl3 luajit curl zlib zstd
+      # Build tools only. The host links the SDK's curl and zlib, and Homebrew's
+      # SDL3, LuaJIT and zstd must not be what gets bundled.
+      - name: Install build tools
+        run: brew install cmake ninja pkgconf
+      - name: Build SDL3, LuaJIT and zstd for the app's minimum macOS
+        # Also exports PKG_CONFIG_PATH, MACOSX_DEPLOYMENT_TARGET and LuaJIT's
+        # bin directory to the steps below.
+        run: tools/macos/build_deps.sh
       - name: Run macOS script tests
         run: tools/macos/tests/run.sh
       - name: Build app
         run: tools/macos/build_app.sh
       - name: Package app
         run: tools/macos/package_app.sh
+      - name: Check minimum macOS
+        run: tools/macos/check_min_macos.sh
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

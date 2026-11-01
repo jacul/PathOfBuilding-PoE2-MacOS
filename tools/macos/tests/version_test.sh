@@ -22,6 +22,9 @@ cat > "${tmp}/Info.plist" <<'EOF'
   <string>0.19.0</string>
   <key>CFBundleVersion</key>
   <string>7</string>
+  <!-- the comment Info.plist.in carries above the key -->
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
 </dict></plist>
 EOF
 cat > "${tmp}/manifest.xml" <<'EOF'
@@ -35,6 +38,11 @@ EOF
 check "build_from_plist"     "$(version_build_from_plist "${tmp}/Info.plist")"     "7"
 check "engine_from_plist"    "$(version_engine_from_plist "${tmp}/Info.plist")"    "0.19.0"
 check "engine_from_manifest" "$(version_engine_from_manifest "${tmp}/manifest.xml")" "0.21.0"
+check "min_macos_from_plist" "$(version_min_macos_from_plist "${tmp}/Info.plist")" "14.0"
+# The real template too: build_app.sh and build_deps.sh compile for this value,
+# so a parse that came back empty or mangled would mis-target every build.
+check "min_macos_from_plist reads Info.plist.in" \
+  "$(version_min_macos_from_plist "${repo_root}/macos/Info.plist.in" | grep -cE '^[0-9]+\.[0-9]+$')" "1"
 
 # write_plist sets both fields
 version_write_plist "${tmp}/Info.plist" "0.22.0" "9"

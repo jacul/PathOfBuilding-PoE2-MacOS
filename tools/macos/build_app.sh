@@ -11,6 +11,8 @@ build_dir="${repo_root}/build/macos-arm64"
 app_dir="${repo_root}/PathOfBuilding-PoE2"
 # shellcheck source=tools/macos/lib/build_cache.sh
 source "${repo_root}/tools/macos/lib/build_cache.sh"
+# shellcheck source=tools/macos/lib/version.sh
+source "${repo_root}/tools/macos/lib/version.sh"
 
 usage() {
   echo "usage: $(basename "$0") [-c|--clean]" >&2
@@ -65,10 +67,22 @@ elif stale_path="$(build_cache_stale_path "${build_dir}/CMakeCache.txt")"; then
   echo "Stale CMake cache: ${stale_path} no longer exists (Homebrew upgrade?)." >&2
   echo "Discarding the cache and configuring from scratch..." >&2
   rm -rf "${build_dir}"
+elif [[ -f "${build_dir}/CMakeCache.txt" &&
+        "$(cat "${build_dir}/pkg-config-path.txt" 2>/dev/null)" != "${PKG_CONFIG_PATH:-}" ]]; then
+  # The same caching from the other side: a build dir keeps linking whichever
+  # libraries it was first configured with, so switching between Homebrew's and
+  # build_deps.sh's (PKG_CONFIG_PATH) needs a fresh configure too.
+  echo "PKG_CONFIG_PATH changed since the last configure; configuring from scratch..." >&2
+  rm -rf "${build_dir}"
 fi
 
+# Compile the host for the app's declared floor rather than this Mac's macOS, so
+# an API newer than the floor is a build error here, not a crash for users.
+min_macos="$(version_min_macos_from_plist "${repo_root}/macos/Info.plist.in")"
 cmake -S "${repo_root}/macos" -B "${build_dir}" -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DMACOS_DEV_BUILD="${dev_build}"
+  -DCMAKE_BUILD_TYPE=Release -DMACOS_DEV_BUILD="${dev_build}" \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET="${min_macos}"
+printf '%s\n' "${PKG_CONFIG_PATH:-}" > "${build_dir}/pkg-config-path.txt"
 cmake --build "${build_dir}"
 
 app="${build_dir}/PathOfBuilding-PoE2.app"

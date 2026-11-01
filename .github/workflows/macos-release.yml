@@ -17,7 +17,11 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    # The runner's macOS does not set the app's minimum: the bundled libraries
+    # are built from source for that minimum instead of coming from Homebrew
+    # bottles, and the package is checked against it before publishing. See
+    # docs/macos.md.
+    runs-on: macos-26
     steps:
       - name: Resolve tag
         id: tag
@@ -32,6 +36,17 @@ jobs:
         with:
           ref: ${{ steps.tag.outputs.tag }}
           submodules: recursive
+      # The library build and the minimum-macOS check come from this workflow's
+      # own commit rather than the tag: a manual run against an older tag builds
+      # that tag's tree, which may predate them (tags up to v0.23.1-macos.18 have
+      # neither). On a tag push the two are the same commit.
+      - name: Checkout release tooling
+        uses: actions/checkout@v4
+        with:
+          path: .release-tooling
+          sparse-checkout: |
+            tools/macos
+            macos
       - name: Verify tag matches Info.plist version
         run: |
           set -eu
@@ -54,14 +69,23 @@ jobs:
             exit 1
           fi
           echo "Tag $TAG matches Info.plist (engine $short, build $cfv)."
-      - name: Install dependencies
-        run: brew install cmake ninja sdl3 luajit curl zlib zstd
+      # Build tools only. The host links the SDK's curl and zlib, and Homebrew's
+      # SDL3, LuaJIT and zstd must not be what gets bundled.
+      - name: Install build tools
+        run: brew install cmake ninja pkgconf
+      - name: Build SDL3, LuaJIT and zstd for the app's minimum macOS
+        # Also exports PKG_CONFIG_PATH, MACOSX_DEPLOYMENT_TARGET and LuaJIT's
+        # bin directory to the steps below. Those are read by pkg-config, CMake
+        # and clang themselves, so any tag's build scripts pick them up.
+        run: .release-tooling/tools/macos/build_deps.sh
       - name: Run macOS script tests
         run: tools/macos/tests/run.sh
       - name: Build and package
         run: |
           tools/macos/build_app.sh
           tools/macos/package_app.sh
+      - name: Check minimum macOS
+        run: .release-tooling/tools/macos/check_min_macos.sh "dist/macos-arm64/Path of Building (PoE2).app"
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

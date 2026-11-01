@@ -12,11 +12,11 @@ It keeps the original Lua application and the entire calculation engine **unchan
 - Apple Silicon Mac (arm64)
 - macOS 14 (Sonoma) or newer
 
-The exact minimum is set by the machine that builds the release and is declared
-in the app itself (`LSMinimumSystemVersion`), so macOS will tell you plainly if a
-build is too new for your Mac rather than failing to launch. See
-[docs/macos.md](docs/macos.md#minimum-macos-version) for why it is 14 and what
-supporting older would take.
+Releases are built for macOS 14 and declare their minimum in the app itself
+(`LSMinimumSystemVersion`), so macOS will tell you plainly if a build is too new
+for your Mac rather than failing to launch. See
+[docs/macos.md](docs/macos.md#minimum-macos-version) for how that minimum is
+kept.
 
 ## Install
 Download the latest `PathOfBuilding-PoE2-macos-arm64.zip` from the [Releases page](https://github.com/jacul/PathOfBuilding-PoE2-MacOS/releases/latest), unzip it, and move **Path of Building (PoE2).app** to your Applications folder. On first launch, macOS Gatekeeper may require you to right‑click the app and choose **Open** (it is not notarized).

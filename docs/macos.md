@@ -45,6 +45,10 @@ git submodule update --init --recursive
 - macOS 14 or newer
 - `git`, and Homebrew packages: `cmake`, `ninja`, `sdl3` (3.4.0 or later), `luajit`, `curl`, `zlib`, `zstd`
 
+Homebrew's `sdl3`, `luajit` and `zstd` are fine for development. A build you
+intend to ship needs `tools/macos/build_deps.sh` instead; see
+[Minimum macOS version](#minimum-macos-version).
+
 ## Build
 
 ```bash
@@ -139,35 +143,70 @@ right-click → **Open** step is unchanged.
 
 ### Minimum macOS version
 
-`LSMinimumSystemVersion` is **measured from the finished bundle**, not chosen:
+The app supports **macOS 14 (Sonoma) and later**. That floor is declared once, as
+`LSMinimumSystemVersion` in `macos/Info.plist.in`, and everything is built for it:
+
+- **The host binary** is compiled with `CMAKE_OSX_DEPLOYMENT_TARGET` set to the
+  floor (`build_app.sh` passes it in), and `-Werror=unguarded-availability-new`
+  turns any unguarded use of a newer macOS API into a build error. The SDK is
+  newer than the floor (CI builds with the runner's Xcode), so such a call would
+  otherwise compile and then fail at runtime on an older Mac.
+- **The bundled libraries** (SDL3, LuaJIT, zstd) are built from pinned upstream
+  sources by `tools/macos/build_deps.sh`, with `MACOSX_DEPLOYMENT_TARGET` set to
+  the floor. Homebrew bottles can't be shipped: a bottle targets the macOS it was
+  built for (on a macOS 26 workstation all three report `minos 26.0`), and
+  Homebrew stops publishing bottles for a macOS release once it drops it — it no
+  longer builds Sonoma bottles of SDL3 or LuaJIT. Bundling bottles would make the
+  build machine's macOS everyone's floor.
+
+`LSMinimumSystemVersion` in the packaged app is still **measured, not copied**:
 packaging takes the highest `LC_BUILD_VERSION` `minos` across the host binary and
-the bundled libraries and writes that into `Contents/Info.plist`. dyld refuses
-any image whose minimum exceeds the running OS, so that highest value is the real
-floor.
+the bundled libraries and writes that into `Contents/Info.plist`. dyld refuses any
+image whose minimum exceeds the running OS, so that highest value is the real
+floor, and macOS shows its plain "requires macOS X" message instead of a crash.
 
-It lands where it does because Homebrew bottles are built on — and therefore
-targeted at — the machine that built them. On a macOS 26 workstation all three
-bottles report `minos 26.0`; on the `macos-14` release runner they report 14. So
-the release builder's OS sets the floor for everyone, and **no CMake setting on
-our side can lower it** while the libraries come from bottles. Bumping the
-runner image raises the minimum for users, which is worth remembering before
-changing `runs-on` in `.github/workflows/macos-release.yml`.
+Both workflows build on `macos-26` and then run `tools/macos/check_min_macos.sh`,
+which prints the bundle's `LSMinimumSystemVersion` and the `otool -l` `minos`
+lines of every binary, and fails unless the bundle declares exactly the floor and
+nothing inside needs a newer macOS. Since the runner no longer sets the floor,
+changing `runs-on` doesn't change who can run the app.
 
-Because the value is measured, a locally packaged build honestly declares the
-workstation's OS — expect a higher number than a CI release, and do not ship it.
+To package locally the way CI does:
 
-Supporting an older macOS than the runner means building SDL3, LuaJIT and zstd
-from source with an explicit `CMAKE_OSX_DEPLOYMENT_TARGET` instead of consuming
-bottles. That also buys pinned, reproducible dependency versions and a CI build
-that no longer depends on what `brew` happened to resolve that day; the cost is
-build time and owning the upgrade cadence.
+```bash
+tools/macos/build_deps.sh                  # into build/deps; skips what's current
+export PKG_CONFIG_PATH="…"                 # the line build_deps.sh prints
+tools/macos/package_app.sh
+tools/macos/check_min_macos.sh
+```
+
+An ordinary local build links Homebrew's libraries instead. Its package honestly
+declares the workstation's macOS (packaging prints a note), and the linker warns
+that those libraries were built for a newer macOS than the host targets. Both are
+expected for development; never publish such a package. `build_app.sh`
+reconfigures from scratch whenever `PKG_CONFIG_PATH` changes, so switching
+between the two kinds of build is safe.
+
+**Updating the libraries:** their versions and SHA-256s are pinned at the top of
+`build_deps.sh` (`brew info --json=v2 <formula>` shows Homebrew's current
+versions as a reference). A pull request's build proves new pins, including the
+minimum-macOS check.
+
+**Raising the floor** is a decision about users, not a build detail: change
+`LSMinimumSystemVersion` in `macos/Info.plist.in` and everything above follows.
+The in-app updater reads a downloaded update's `LSMinimumSystemVersion` and won't
+install a build the Mac can't run (it says so once per release). Builds up to 18
+predate that check and would install it anyway, leaving an app that won't open,
+so let a build with the check reach users well before raising the floor.
 
 ### Third-party notices
 
 Shipping those libraries makes the release a binary redistribution of them, so
 packaging also copies each one's upstream license text into
-`Contents/Resources/licenses/`, taken from the formula's Homebrew prefix so it
-always matches the version actually bundled. zstd's BSD-3 terms require the
+`Contents/Resources/licenses/`, taken from the library's install prefix so it
+always matches the version actually bundled: the formula's Homebrew prefix, or
+the matching `build/deps/<name>` prefix, where `build_deps.sh` keeps upstream's
+license files under the names Homebrew uses. zstd's BSD-3 terms require the
 notice accompany binary redistributions; SDL3 (zlib) and LuaJIT (MIT) are
 included on the same basis. zstd is dual-licensed and ships both `LICENSE`
 (BSD-3) and `COPYING` (GPLv2), so both are copied rather than choosing on the
@@ -257,11 +296,12 @@ tools/macos/tests/run.sh
 
 It runs: `lint.sh` (shell `bash -n` + Lua `luajit` syntax for every script, plus
 `shellcheck` if installed), `version_test.sh` (the shared `tools/macos/lib/version.sh`
-helpers), `set_version_test.sh`, and `lua_test.lua` (the pure helpers in
-`UpdateCheck.lua`/`UpdateApply.lua`, exposed via a `_TEST` guard). The release
-workflow (`.github/workflows/macos-release.yml`) and the build workflow
-(`macos.yml`) both run `tools/macos/tests/run.sh` before building, so a release
-fails fast if any test fails.
+helpers), `set_version_test.sh`, `check_min_macos_test.sh` (the minimum-macOS
+check, against throwaway binaries compiled for known macOS versions), and
+`lua_test.lua` (the pure helpers in `UpdateCheck.lua`/`UpdateApply.lua`, exposed
+via a `_TEST` guard). The release workflow (`.github/workflows/macos-release.yml`)
+and the build workflow (`macos.yml`) both run `tools/macos/tests/run.sh` before
+building the app, so a release fails fast if any test fails.
 
 Native rendering/input, filesystem API, and worker-shutdown regressions have
 an optional headless test target (requires the normal macOS build dependencies):

@@ -34,9 +34,11 @@
   </array>
   <key>CFBundleVersion</key>
   <string>18</string>
-  <!-- Placeholder only: package_app.sh overwrites this with the value measured
-       from the finished bundle (the highest minos across the host binary and the
-       bundled libraries). See docs/macos.md#minimum-macos-version. -->
+  <!-- The app's minimum macOS: build_app.sh and build_deps.sh compile for it, and
+       check_min_macos.sh fails a package that needs anything newer. In the
+       packaged app, package_app.sh replaces it with the value measured from the
+       finished bundle (the highest minos across the host binary and the bundled
+       libraries). See docs/macos.md#minimum-macos-version. -->
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
