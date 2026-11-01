@@ -57,6 +57,8 @@ jobs:
         run: tools/macos/package_app.sh
       - name: Check minimum macOS
         run: tools/macos/check_min_macos.sh
+      - name: Check the bundled LuaJIT loads the app's Lua
+        run: tools/macos/check_bundled_lua.sh
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

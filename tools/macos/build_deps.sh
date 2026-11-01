@@ -42,9 +42,15 @@ sdl3_sha256=9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3
 
 # LuaJIT publishes no release tarballs: it is consumed as a commit on its v2.1
 # branch, and its version number is that commit's timestamp (2.1.<unix time>).
-luajit_commit=ea9eb7edb5eac4a9d175d74523db34fac0fa5180
+# Held at 2.1.1787165859, the revision build 17 shipped. From commit c41d727
+# ("Add line number directive", 2026-10-20) on, LuaJIT only skips a first line
+# that starts with "#!"; any other leading '#' is read as a `# <line> "file"`
+# directive. PoB's Launch.lua starts with "#@ SimpleGraphic", so a newer LuaJIT
+# can't load it and the app quits at launch. Don't move past c41d727 until the
+# host skips that line itself; check_bundled_lua.sh fails the build if it would.
+luajit_commit=1ee778a4e37122d8ca7d5733c590a47dafd6b15c
 luajit_url="https://github.com/LuaJIT/LuaJIT/archive/${luajit_commit}.tar.gz"
-luajit_sha256=338a5640be00b89fd0a2a027a7433fcbbb4d006be840d216d84151386b5bcdf7
+luajit_sha256=512cdb23dafa39c6247763ae15f29341734b1596067b067db0c0387bbebc7c55
 
 zstd_version=1.5.7
 zstd_url="https://github.com/facebook/zstd/releases/download/v${zstd_version}/zstd-${zstd_version}.tar.gz"

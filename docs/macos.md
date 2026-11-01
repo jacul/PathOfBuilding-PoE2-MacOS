@@ -45,9 +45,10 @@ git submodule update --init --recursive
 - macOS 14 or newer
 - `git`, and Homebrew packages: `cmake`, `ninja`, `sdl3` (3.4.0 or later), `luajit`, `curl`, `zlib`, `zstd`
 
-Homebrew's `sdl3`, `luajit` and `zstd` are fine for development. A build you
-intend to ship needs `tools/macos/build_deps.sh` instead; see
-[Minimum macOS version](#minimum-macos-version).
+Homebrew's `sdl3`, `luajit` and `zstd` are fine for development, except that
+`luajit` 2.1.1792527110 and later can't start the app (see "LuaJIT is held back"
+under [Minimum macOS version](#minimum-macos-version)). A build you intend to
+ship needs `tools/macos/build_deps.sh` instead.
 
 ## Build
 
@@ -189,8 +190,24 @@ between the two kinds of build is safe.
 
 **Updating the libraries:** their versions and SHA-256s are pinned at the top of
 `build_deps.sh` (`brew info --json=v2 <formula>` shows Homebrew's current
-versions as a reference). A pull request's build proves new pins, including the
-minimum-macOS check.
+versions as a reference). A CI build then checks new pins twice: with
+`check_min_macos.sh` as above, and with `tools/macos/check_bundled_lua.sh`, which
+compiles every Lua file the app ships with the app's own LuaJIT and fails if any
+of them doesn't load. Both workflows run both checks after packaging, and the
+release workflow runs them before it uploads anything.
+
+**LuaJIT is held back** at 2.1.1787165859 (August 2026), the revision build 17
+shipped. LuaJIT commit `c41d727` ("Add line number directive", 2026-10-20)
+changed what happens to a first line starting with `#`: older revisions skip it,
+newer ones skip only `#!` and read anything else as a `# <line> "file"`
+directive. PoB's `Launch.lua` starts with SimpleGraphic's `#@ SimpleGraphic`
+marker, so with a newer LuaJIT the app quits at launch with
+`Launch.lua failed: Launch.lua:1: unexpected symbol near '#'`. Build 18 first
+shipped that way, which is what `check_bundled_lua.sh` now catches. Moving LuaJIT
+forward needs the host to skip that line itself before loading `Launch.lua`.
+Development builds are affected too: Homebrew's `luajit` has the change from
+2.1.1792527110 (2026-10-21) on, so after a `brew upgrade luajit` a dev build
+quits the same way.
 
 **Raising the floor** is a decision about users, not a build detail: change
 `LSMinimumSystemVersion` in `macos/Info.plist.in` and everything above follows.
@@ -297,7 +314,9 @@ tools/macos/tests/run.sh
 It runs: `lint.sh` (shell `bash -n` + Lua `luajit` syntax for every script, plus
 `shellcheck` if installed), `version_test.sh` (the shared `tools/macos/lib/version.sh`
 helpers), `set_version_test.sh`, `check_min_macos_test.sh` (the minimum-macOS
-check, against throwaway binaries compiled for known macOS versions), and
+check, against throwaway binaries compiled for known macOS versions),
+`check_bundled_lua_test.sh` (the bundled-Lua check, including that PoB's own
+`Launch.lua` loads with the LuaJIT pkg-config finds), and
 `lua_test.lua` (the pure helpers in `UpdateCheck.lua`/`UpdateApply.lua`, exposed
 via a `_TEST` guard). The release workflow (`.github/workflows/macos-release.yml`)
 and the build workflow (`macos.yml`) both run `tools/macos/tests/run.sh` before

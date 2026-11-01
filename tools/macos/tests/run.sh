@@ -24,6 +24,7 @@ run "version.sh"      bash "${here}/version_test.sh"
 run "build_cache.sh"  bash "${here}/build_cache_test.sh"
 run "bundle_libs.sh"  bash "${here}/bundle_libs_test.sh"
 run "check_min_macos" bash "${here}/check_min_macos_test.sh"
+run "check_bundled_lua" bash "${here}/check_bundled_lua_test.sh"
 run "set_version.sh"  bash "${here}/set_version_test.sh"
 run "lua helpers"     luajit "${here}/lua_test.lua"
 

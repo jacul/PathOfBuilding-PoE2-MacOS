@@ -83,8 +83,9 @@ Watching the release workflow afterwards is manual (Actions tab).
 Pushing a tag matching `v*-macos.*` triggers the **macOS release** workflow
 (`.github/workflows/macos-release.yml`), which verifies the tag matches
 `Info.plist`, builds the bundled libraries for macOS 14 and packages on an Apple
-Silicon runner, checks the package still runs on macOS 14, and publishes the
-`.zip` + `.zip.sha256` to a new GitHub Release with install/verify notes.
+Silicon runner, checks the package still runs on macOS 14 and that its LuaJIT
+loads every Lua file it ships, and publishes the `.zip` + `.zip.sha256` to a new
+GitHub Release with install/verify notes.
 
 Before tagging, add a `VERSION[<engine>-macos.<build>][YYYY/MM/DD]` entry at the
 **top** of [`macos/changelog.txt`](macos/changelog.txt) describing the

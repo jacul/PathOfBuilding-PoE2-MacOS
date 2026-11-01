@@ -36,10 +36,10 @@ jobs:
         with:
           ref: ${{ steps.tag.outputs.tag }}
           submodules: recursive
-      # The library build and the minimum-macOS check come from this workflow's
-      # own commit rather than the tag: a manual run against an older tag builds
-      # that tag's tree, which may predate them (tags up to v0.23.1-macos.18 have
-      # neither). On a tag push the two are the same commit.
+      # The library build and the package checks come from this workflow's own
+      # commit rather than the tag: a manual run against an older tag builds that
+      # tag's tree, which may predate them (tags up to v0.23.1-macos.18 have none
+      # of them). On a tag push the two are the same commit.
       - name: Checkout release tooling
         uses: actions/checkout@v4
         with:
@@ -86,6 +86,8 @@ jobs:
           tools/macos/package_app.sh
       - name: Check minimum macOS
         run: .release-tooling/tools/macos/check_min_macos.sh "dist/macos-arm64/Path of Building (PoE2).app"
+      - name: Check the bundled LuaJIT loads the app's Lua
+        run: .release-tooling/tools/macos/check_bundled_lua.sh "dist/macos-arm64/Path of Building (PoE2).app"
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
