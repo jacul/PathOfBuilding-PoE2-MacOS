@@ -28,6 +28,8 @@ struct DrawCommand {
     SDL_Texture* texture = nullptr;
     SDL_GPURenderState* gpuState = nullptr;
     std::shared_ptr<GpuImage> gpuImage;
+    // Retain the native image until replay finishes, including software mips.
+    std::shared_ptr<void> imageOwner;
     bool hasSrc = false;
     SDL_FRect src{};
     SDL_Vertex verts[4]{};
@@ -57,6 +59,9 @@ private:
     SDL_Renderer* renderer = nullptr;
     std::unique_ptr<GpuImages> gpuImages;
     std::unordered_set<void*> loadedImages;
+    bool memoryDiagnostics = false;
+    unsigned long long imageLoads = 0, imageReleases = 0;
+    void reportMemory(const char* phase);
     bool running = true;
     double dpiScaleOverride = 0.0;
     SDL_FColor drawColor = {1.0f, 1.0f, 1.0f, 1.0f};

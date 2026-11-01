@@ -466,6 +466,10 @@ struct FontRenderer::Impl : FontImpl {};
 
 void FontRenderer::setFontsDirectory(std::filesystem::path path) {
     fontsDirectory = std::move(path);
+    clear();
+}
+
+void FontRenderer::clear() {
     cache.clear();
 }
 

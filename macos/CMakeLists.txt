@@ -59,6 +59,9 @@ if(POB_BUILD_TESTS)
     add_test(NAME engine-regressions COMMAND EngineRegressionTests
         "${CMAKE_CURRENT_SOURCE_DIR}/../PathOfBuilding-PoE2/runtime/SimpleGraphic/Fonts")
     set_tests_properties(engine-regressions PROPERTIES TIMEOUT 15)
+    add_test(NAME image-lifetime-regressions COMMAND EngineRegressionTests
+        "${CMAKE_CURRENT_SOURCE_DIR}/../PathOfBuilding-PoE2/runtime/SimpleGraphic/Fonts" --image-lifetime)
+    set_tests_properties(image-lifetime-regressions PROPERTIES TIMEOUT 15)
     add_test(NAME gpu-image-regressions COMMAND EngineRegressionTests
         "${CMAKE_CURRENT_SOURCE_DIR}/../PathOfBuilding-PoE2/runtime/SimpleGraphic/Fonts" --gpu)
     set_tests_properties(gpu-image-regressions PROPERTIES TIMEOUT 60)

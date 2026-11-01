@@ -22,6 +22,64 @@ static void testWarpMouse(SDL_Window*, float x, float y) {
 #undef SDL_WarpMouseInWindow
 
 struct EngineRegressionTests {
+    static void imageLifetime() {
+        // Exercise the production Lua API on a CPU surface. No window or user
+        // files are needed. This models overwritten per-frame tooltip handles.
+        SDL_Surface* surface = SDL_CreateSurface(16, 16, SDL_PIXELFORMAT_RGBA32);
+        assert(surface);
+        char temp[] = "/tmp/pob-image-lifetime-XXXXXX";
+        assert(mkdtemp(temp));
+        const fs::path path = fs::path(temp) / "image.tga";
+        {
+            const unsigned char header[18] = {0,0,2,0,0,0,0,0,0,0,0,0,4,0,4,0,32,32};
+            const std::string pixels(4 * 4 * 4, '\xff');
+            std::ofstream file(path, std::ios::binary);
+            file.write(reinterpret_cast<const char*>(header), sizeof(header));
+            file.write(pixels.data(), pixels.size());
+        }
+        {
+            Host host;
+            host.renderer = SDL_CreateSoftwareRenderer(surface);
+            assert(host.renderer);
+            host.L = luaL_newstate(); luaL_openlibs(host.L); host.registerApi();
+            lua_pushstring(host.L, path.c_str()); lua_setglobal(host.L, "imagePath");
+            auto lua = [&](const char* code) {
+                if (luaL_dostring(host.L, code) != LUA_OK) {
+                    std::fprintf(stderr, "%s\n", lua_tostring(host.L, -1));
+                    std::abort();
+                }
+            };
+            for (int batch = 1; batch <= 3; ++batch) {
+                lua("for i=1,100 do local h=NewImageHandle(); h:Load(imagePath); assert(h:IsValid()) end; collectgarbage('collect')");
+                std::fprintf(stderr, "image-lifetime: discarded=%d live=%zu\n", batch * 100, host.loadedImages.size());
+            }
+            assert(host.loadedImages.empty());
+            // A draw must own its image through collection, reload, and unload.
+            for (const char* draw : {"DrawImage(h,0,0,4,4)", "DrawImageQuad(h,0,0,4,0,4,4,0,4)"}) {
+                lua("h=NewImageHandle(); h:Load(imagePath)");
+                lua(draw);
+                lua("h:Load(imagePath); h:Unload(); h:Unload(); h=nil; collectgarbage('collect')");
+                assert(host.loadedImages.size() == 1);
+                host.flushDrawCommands();
+                assert(SDL_RenderPresent(host.renderer));
+                assert(host.loadedImages.empty());
+                const auto* pixel = static_cast<const unsigned char*>(surface->pixels);
+                assert(pixel[0] == 255 && pixel[1] == 255 && pixel[2] == 255);
+            }
+            // Closing Lua must release a still-reachable handle before SDL.
+            // Finalizers on both sides of its owner draw it: only the one that
+            // runs first may find an image, whatever the finalizer order.
+            lua("local function probe() local p=newproxy(true); getmetatable(p).__gc=function() DrawImage(h,0,0,4,4) end; return p end"
+                "; before=probe(); h=NewImageHandle(); h:Load(imagePath); after=probe()");
+            lua_close(host.L); host.L = nullptr;
+            assert(host.drawCommands.size() == 1);
+            host.drawCommands.clear();
+            assert(host.loadedImages.empty());
+        }
+        SDL_DestroySurface(surface);
+        fs::remove_all(temp);
+        std::puts("Image lifetime tests passed.");
+    }
     static void gpuImages(const char* fonts) {
         // No window, desktop capture, or application state: render only to an
         // offscreen texture and inspect its pixels through SDL.
@@ -170,6 +228,22 @@ struct EngineRegressionTests {
             }
             assert(assets > 0);
             std::printf("Uploaded %d real tree DDS assets.\n", assets);
+
+            // Exercise garbage collection through the real GPU/PNG upload path.
+            const fs::path icon = fs::path(fonts).parent_path().parent_path().parent_path() / "src/Assets/fractureditemsymbol.png";
+            lua_pushstring(host.L, icon.c_str()); lua_setglobal(host.L, "iconPath");
+            for (int i = 0; i < 100; ++i) {
+                assert(luaL_dostring(host.L, R"(
+                    local h = NewImageHandle(); h:Load(iconPath)
+                    assert(h:IsValid()); DrawImage(h, 0,0,44,44)
+                )") == LUA_OK);
+                lua_gc(host.L, LUA_GCCOLLECT, 0);
+                assert(host.loadedImages.size() == 1);
+                host.flushDrawCommands();
+                (void)read(1,1);
+                assert(host.loadedImages.empty());
+            }
+            assert(host.imageLoads == 100 && host.imageReleases == 100);
             SDL_SetRenderTarget(host.renderer, nullptr);
             SDL_DestroyTexture(target);
             host.gpuImages.reset();
@@ -358,6 +432,7 @@ struct EngineRegressionTests {
 
 int main(int argc, char** argv) {
     assert(argc == 2 || argc == 3);
-    if (argc == 3 && std::string(argv[2]) == "--gpu") EngineRegressionTests::gpuImages(argv[1]);
+    if (argc == 3 && std::string(argv[2]) == "--image-lifetime") EngineRegressionTests::imageLifetime();
+    else if (argc == 3 && std::string(argv[2]) == "--gpu") EngineRegressionTests::gpuImages(argv[1]);
     else EngineRegressionTests::run(argv[1]);
 }

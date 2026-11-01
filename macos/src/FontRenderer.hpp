@@ -11,6 +11,8 @@ class FontRenderer {
 public:
     void setFontsDirectory(std::filesystem::path path);
     void setScreenWidth(int width);
+    // Release atlas textures while their renderer is still alive.
+    void clear();
 
     double stringWidth(double height, const std::string& fontAlias, const std::string& text);
     int stringCursorIndex(double height, const std::string& fontAlias, const std::string& text, int curX, int curY);

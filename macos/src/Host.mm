@@ -32,6 +32,7 @@ extern "C" {
 #include <cstring>
 #include <crt_externs.h>
 #include <mach-o/dyld.h>
+#include <mach/mach.h>
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -73,7 +74,11 @@ struct NativeImage {
     // Staging pixels exist only until the GPU upload finishes.
     std::vector<ImageMipPixels> pixels;
     std::shared_ptr<GpuImage> gpu;
+    size_t textureBytes = 0; // RGBA payload; excludes driver overhead.
 };
+
+constexpr const char* kImageOwnerMeta = "PoB.ImageOwner";
+using ImageOwner = std::shared_ptr<NativeImage>;
 
 struct TextSegment {
     std::string text;
@@ -431,6 +436,11 @@ GpuImages* gpuImagesFor(SDL_Renderer* renderer) {
 
 // Upload only after all source levels are available on the GPU path.
 bool finishImage(SDL_Renderer* renderer, NativeImage* image) {
+    if (!image->pixels.empty()) {
+        for (const auto& level : image->pixels) image->textureBytes += level.rgba.size();
+    } else {
+        for (const auto& mip : image->mips) image->textureBytes += size_t(mip.w) * mip.h * 4;
+    }
     if (auto* gpu = gpuImagesFor(renderer)) {
         image->gpu = gpu->upload(image->pixels, image->cellWidth, image->cellHeight, image->layerCount, image->atlasColumns);
         image->pixels.clear();
@@ -734,7 +744,9 @@ int selectMipLevel(const NativeImage* image, float rho) {
 NativeImage* loadCocoaImage(SDL_Renderer* renderer, const fs::path& path) {
     @autoreleasepool {
         NSString* nsPath = [NSString stringWithUTF8String:path.string().c_str()];
-        NSImage* nsImage = [[NSImage alloc] initWithContentsOfFile:nsPath];
+        // This target uses manual reference counting. The pool alone does not
+        // release an object returned by alloc/init.
+        NSImage* nsImage = [[[NSImage alloc] initWithContentsOfFile:nsPath] autorelease];
         if (!nsImage) {
             return nullptr;
         }
@@ -859,12 +871,22 @@ NativeImage* loadNativeImage(lua_State* L, SDL_Renderer* renderer, const std::st
     return nullptr;
 }
 
+ImageOwner* imageOwnerFromLua(lua_State* L, int index) {
+    if (!lua_istable(L, index)) return nullptr;
+    lua_getfield(L, index, "__native");
+    auto* owner = static_cast<ImageOwner*>(luaL_testudata(L, -1, kImageOwnerMeta));
+    lua_pop(L, 1);
+    return owner;
+}
+
 NativeImage* imageFromLua(lua_State* L, int index) {
+    if (auto* owner = imageOwnerFromLua(L, index)) return owner->get();
+    // Internal offscreen tests also use borrowed native images.
     if (!lua_istable(L, index)) {
         return nullptr;
     }
     lua_getfield(L, index, "__native");
-    auto* image = static_cast<NativeImage*>(lua_touserdata(L, -1));
+    auto* image = lua_islightuserdata(L, -1) ? static_cast<NativeImage*>(lua_touserdata(L, -1)) : nullptr;
     lua_pop(L, 1);
     return image;
 }
@@ -1022,20 +1044,48 @@ Host* Host::current = nullptr;
 
 Host::Host() {
     current = this;
+    const char* diagnostics = std::getenv("POB_MEMORY_DIAGNOSTICS");
+    memoryDiagnostics = diagnostics && std::strcmp(diagnostics, "1") == 0;
+}
+
+void Host::reportMemory(const char* phase) {
+    if (!memoryDiagnostics) return;
+    task_vm_info_data_t vm{};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    const bool vmValid = task_info(mach_task_self(), TASK_VM_INFO,
+        reinterpret_cast<task_info_t>(&vm), &count) == KERN_SUCCESS;
+    size_t bytes = 0, states = 0;
+    for (void* ptr : loadedImages) {
+        const auto* image = static_cast<const NativeImage*>(ptr);
+        bytes += image->textureBytes;
+        if (image->gpu) for (auto* state : image->gpu->states) states += state != nullptr;
+    }
+    const double luaKiB = L ? lua_gc(L, LUA_GCCOUNT, 0) + lua_gc(L, LUA_GCCOUNTB, 0) / 1024.0 : 0;
+    const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startTime).count();
+    std::fprintf(stderr, "pob-memory phase=%s elapsed_ms=%.0f vm_valid=%d footprint=%llu resident=%llu compressed=%llu "
+        "lua_kib=%.1f images=%zu image_rgba_bytes=%zu states=%zu loads=%llu releases=%llu draws=%zu capacity=%zu sdl=%s\n",
+        phase, elapsedMs, vmValid, vm.phys_footprint, vm.resident_size, vm.compressed, luaKiB,
+        loadedImages.size(), bytes, states, imageLoads, imageReleases, drawCommands.size(), drawCommands.capacity(), SDL_GetRevision());
+    std::fflush(stderr);
 }
 
 Host::~Host() {
+    reportMemory("shutdown-start");
     subScriptManager.shutdown();
     if (L) {
         lua_close(L);
+        L = nullptr;
     }
     drawCommands.clear();
-    for (void* image : loadedImages) destroyNativeImage(static_cast<NativeImage*>(image));
-    loadedImages.clear();
+    // Lua owners and queued draws release every native image above.
+    fontRenderer.clear();
+    reportMemory("images-released");
     gpuImages.reset();
     if (renderer) {
         SDL_DestroyRenderer(renderer);
+        renderer = nullptr;
     }
+    reportMemory("renderer-released");
     if (window) {
         SDL_DestroyWindow(window);
     }
@@ -1740,6 +1790,7 @@ void Host::consumeLaunchUrls() {
 int Host::run() {
     consumeLaunchUrls();
     callMainObject("OnInit");
+    auto nextMemoryReport = std::chrono::steady_clock::now();
     while (running) {
         pumpEvents();
         // An occluded window renders nothing anyway, and SDL's Metal backend
@@ -1760,6 +1811,10 @@ int Host::run() {
         beginFrameDraw();
         subScriptManager.processFrame(L, kMainObject);
         callMainObject("OnFrame");
+        if (memoryDiagnostics && std::chrono::steady_clock::now() >= nextMemoryReport) {
+            reportMemory("frame");
+            nextMemoryReport = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        }
         if (renderer && !windowHidden) {
             flushDrawCommands();
             SDL_SetRenderViewport(renderer, nullptr);
@@ -2241,7 +2296,9 @@ int Host::l_DrawImage(lua_State* L) {
     SDL_FRect rect{left, top, width, height};
 
     const bool requestedImage = lua_istable(L, 1);
-    NativeImage* image = imageFromLua(L, 1);
+    // One lookup yields both the image and, for Lua handles, its owner.
+    ImageOwner* owner = imageOwnerFromLua(L, 1);
+    NativeImage* image = owner ? owner->get() : imageFromLua(L, 1);
     if (image && image->texture) {
         // Arg layout (matches SimpleGraphic):
         //   5: xy | 6: xy+stack | 7: xy+stack+mask
@@ -2293,6 +2350,7 @@ int Host::l_DrawImage(lua_State* L) {
         cmd.rect = rect;
         cmd.texture = mip.tex;
         cmd.gpuImage = image->gpu;
+        if (owner) cmd.imageOwner = *owner;
         cmd.gpuState = state;
         cmd.hasSrc = hasSrc;
         cmd.src = src;
@@ -2319,7 +2377,8 @@ int Host::l_DrawImageQuad(lua_State* L) {
         vertices[i].color = current->drawColor;
     }
     const bool requestedImage = lua_istable(L, 1);
-    NativeImage* image = imageFromLua(L, 1);
+    ImageOwner* owner = imageOwnerFromLua(L, 1);
+    NativeImage* image = owner ? owner->get() : imageFromLua(L, 1);
     if (image && image->texture) {
         // Arg layout (matches SimpleGraphic):
         //   9: xy | 10: xy+stack | 11: xy+stack+mask
@@ -2374,6 +2433,7 @@ int Host::l_DrawImageQuad(lua_State* L) {
         std::memcpy(cmd.verts, vertices, sizeof(vertices));
         cmd.texture = image->mips[level].tex;
         cmd.gpuImage = image->gpu;
+        if (owner) cmd.imageOwner = *owner;
         cmd.gpuState = state;
         cmd.geomTextured = true;
     } else if (!requestedImage) {
@@ -2463,21 +2523,37 @@ int Host::l_NewImageHandle(lua_State* L) {
     lua_pushboolean(L, 0);
     lua_setfield(L, -2, "valid");
 
+    // Lua 5.1 does not finalize tables. Store a full userdata owner inside the
+    // compatible table API, so unreachable handles release native resources.
+    new (lua_newuserdata(L, sizeof(ImageOwner))) ImageOwner();
+    if (luaL_newmetatable(L, kImageOwnerMeta)) {
+        // Reset rather than destroy: lua_close finalizers can still reach the
+        // handle, and an empty owner needs no destructor.
+        lua_pushcfunction(L, [](lua_State* L) -> int {
+            static_cast<ImageOwner*>(luaL_checkudata(L, 1, kImageOwnerMeta))->reset();
+            return 0;
+        });
+        lua_setfield(L, -2, "__gc");
+    }
+    lua_setmetatable(L, -2);
+    lua_setfield(L, -2, "__native");
+
     lua_pushcfunction(L, [](lua_State* L) -> int {
-        NativeImage* existing = imageFromLua(L, 1);
-        if (existing) {
-            if (current) current->loadedImages.erase(existing);
-            destroyNativeImage(existing);
-            lua_pushnil(L);
-            lua_setfield(L, 1, "__native");
-        }
+        auto* owner = imageOwnerFromLua(L, 1);
+        if (!owner) return luaL_error(L, "Invalid image handle");
+        owner->reset();
 
         std::string fileName = luaString(L, 2);
         NativeImage* image = current ? loadNativeImage(L, current->renderer, fileName) : nullptr;
         if (image) {
-            current->loadedImages.insert(image);
-            lua_pushlightuserdata(L, image);
-            lua_setfield(L, 1, "__native");
+            Host* host = current;
+            host->loadedImages.insert(image);
+            ++host->imageLoads;
+            *owner = ImageOwner(image, [host](NativeImage* image) {
+                host->loadedImages.erase(image);
+                ++host->imageReleases;
+                destroyNativeImage(image);
+            });
         } else {
             std::fprintf(stderr, "Failed to load image: %s\n", fileName.c_str());
         }
@@ -2488,13 +2564,7 @@ int Host::l_NewImageHandle(lua_State* L) {
     lua_setfield(L, -2, "Load");
 
     lua_pushcfunction(L, [](lua_State* L) -> int {
-        NativeImage* existing = imageFromLua(L, 1);
-        if (existing) {
-            if (current) current->loadedImages.erase(existing);
-            destroyNativeImage(existing);
-        }
-        lua_pushnil(L);
-        lua_setfield(L, 1, "__native");
+        if (auto* owner = imageOwnerFromLua(L, 1)) owner->reset();
         lua_pushboolean(L, 0);
         lua_setfield(L, 1, "valid");
         return 0;
