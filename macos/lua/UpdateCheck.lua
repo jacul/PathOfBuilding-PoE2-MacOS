@@ -10,7 +10,9 @@
 -- of this port. Like upstream (which downloads during the check), this checks
 -- the latest release, and when newer downloads + verifies + extracts the new
 -- .app into a cache dir, then returns "normal" so ApplyUpdate (our UpdateApply.lua
--- replacement) can swap it in. Returns "none" when up to date.
+-- replacement) can swap it in. Returns "none" when up to date. A release that
+-- needs a newer macOS than this Mac runs is never staged: the first check that
+-- finds it reports why (an error toast), later ones return "none".
 --
 -- Subscript contract (from launch:CheckForUpdate):
 --   args:     connectionProtocol, proxyURL, noSSL
@@ -63,6 +65,24 @@ local function isNewer(engineA, buildA, engineB, buildB)
 		end
 	end
 	return (buildB or 0) > (buildA or 0)
+end
+
+-- A string value from an XML property list's text, e.g. LSMinimumSystemVersion
+-- from an Info.plist or ProductVersion from SystemVersion.plist. Pattern match
+-- only, like parseManifestVersion; `key` must not contain pattern characters.
+local function parsePlistString(text, key)
+	return tostring(text or ""):match("<key>" .. key .. "</key>%s*<string>([^<]*)</string>")
+end
+
+-- False when this Mac's macOS (`runningOS`, e.g. "14.6.1") is older than a
+-- bundle's LSMinimumSystemVersion (`requiredOS`, e.g. "15.0"). A version that
+-- couldn't be read doesn't count as a mismatch, so a parsing problem can't
+-- block every update.
+local function meetsMinimumOS(runningOS, requiredOS)
+	if not runningOS or not requiredOS then
+		return true
+	end
+	return not isNewer(runningOS, 0, requiredOS, 0)
 end
 
 -- "v0.19.0-macos.4" -> "0.19.0", "4"  (or nil for an unrecognised tag).
@@ -120,6 +140,8 @@ if _TEST then
 		parseManifestVersion = parseManifestVersion,
 		parseVersionParts = parseVersionParts,
 		isNewer = isNewer,
+		parsePlistString = parsePlistString,
+		meetsMinimumOS = meetsMinimumOS,
 		parseReleaseTag = parseReleaseTag,
 		parsePortVersion = parsePortVersion,
 		buildUpdateChangelog = buildUpdateChangelog,
@@ -143,6 +165,16 @@ local dkjson = require("dkjson")
 
 local function run(cmd)
 	return os.execute(cmd) == 0
+end
+
+local function readFile(path)
+	local f = io.open(path, "r")
+	if not f then
+		return nil
+	end
+	local text = f:read("*a")
+	f:close()
+	return text
 end
 
 local function readLocalVersion()
@@ -303,6 +335,30 @@ if not alreadyStaged() then
 	end
 end
 
+-- Never stage a build this Mac can't run: after the swap LaunchServices would
+-- refuse to open it, leaving no working app. The staged copy's Info.plist is the
+-- authority (packaging measures LSMinimumSystemVersion from its binaries). The
+-- copy stays cached, so later checks re-read it without downloading again and
+-- offer it once macOS has been upgraded.
+local requiredOS = parsePlistString(readFile(stagedApp .. "/Contents/Info.plist"), "LSMinimumSystemVersion")
+local runningOS = parsePlistString(readFile("/System/Library/CoreServices/SystemVersion.plist"), "ProductVersion")
+if not meetsMinimumOS(runningOS, requiredOS) then
+	ConPrintf("Update %s needs macOS %s or newer; this Mac runs %s. Not installing it.", tag, requiredOS, runningOS)
+	-- Tell the user once per release (an error shows as a toast), then stay quiet.
+	local noticePath = stageDir .. "/.os-notice"
+	local seen = io.open(noticePath, "r")
+	if seen then
+		seen:close()
+		return "none"
+	end
+	local notice = io.open(noticePath, "w")
+	if notice then
+		notice:write(requiredOS)
+		notice:close()
+	end
+	return nil, string.format("%s needs macOS %s\nor newer, and this Mac has %s,\nso the update was not installed.", tag, requiredOS, runningOS)
+end
+
 -- Record which staged build ApplyUpdate should install.
 local pending = io.open(stageRoot .. "/pending.txt", "w")
 if pending then
@@ -316,15 +372,6 @@ end
 -- the popup reads it (GetScriptPath().."/changelog.txt"). The popup's
 -- break-at-current-version logic then trims the engine section to the entries
 -- newer than the running engine. Ignored if anything is missing or unwritable.
-local function readFile(path)
-	local f = io.open(path, "r")
-	if not f then
-		return nil
-	end
-	local text = f:read("*a")
-	f:close()
-	return text
-end
 local stagedSrc = stagedApp .. "/Contents/Resources/src"
 local combined = buildUpdateChangelog(
 	readFile(stagedSrc .. "/changelog-macos.txt"),

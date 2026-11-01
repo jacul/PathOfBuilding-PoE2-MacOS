@@ -63,6 +63,41 @@ do
 	ok(UC.parseManifestVersion("garbage") == nil, "parseManifestVersion garbage")
 end
 
+-- parsePlistString
+do
+	-- Info.plist as packaging writes it: indented, the value on its own line.
+	local info = '<dict>\n  <key>CFBundleVersion</key>\n  <string>19</string>\n' ..
+		'  <key>LSMinimumSystemVersion</key>\n  <string>14.0</string>\n</dict>'
+	eq(UC.parsePlistString(info, "LSMinimumSystemVersion"), "14.0", "parsePlistString value on next line")
+	eq(UC.parsePlistString(info, "CFBundleVersion"), "19", "parsePlistString picks the right key")
+	-- SystemVersion.plist uses tabs.
+	local sys = "<dict>\n\t<key>ProductName</key>\n\t<string>macOS</string>\n" ..
+		"\t<key>ProductVersion</key>\n\t<string>14.6.1</string>\n</dict>"
+	eq(UC.parsePlistString(sys, "ProductVersion"), "14.6.1", "parsePlistString tab-indented")
+	ok(UC.parsePlistString(info, "ProductVersion") == nil, "parsePlistString missing key")
+	ok(UC.parsePlistString(nil, "ProductVersion") == nil, "parsePlistString no text")
+	-- The real files the guard reads: the template packaging starts from, and
+	-- this Mac's own version (the tests only run on macOS).
+	local f = assert(io.open("macos/Info.plist.in", "r"))
+	local template = f:read("*a")
+	f:close()
+	ok(UC.parsePlistString(template, "LSMinimumSystemVersion") ~= nil, "parsePlistString reads Info.plist.in")
+	f = assert(io.open("/System/Library/CoreServices/SystemVersion.plist", "r"))
+	local running = UC.parsePlistString(f:read("*a"), "ProductVersion")
+	f:close()
+	ok(running ~= nil and running:match("^%d+%.%d+") ~= nil, "parsePlistString reads SystemVersion.plist")
+end
+
+-- meetsMinimumOS
+ok(UC.meetsMinimumOS("14.6.1", "14.0") == true, "meetsMinimumOS newer point release")
+ok(UC.meetsMinimumOS("14.0", "14.0") == true, "meetsMinimumOS exact")
+ok(UC.meetsMinimumOS("14.6.1", "15.0") == false, "meetsMinimumOS older major")
+ok(UC.meetsMinimumOS("15.0", "15.1") == false, "meetsMinimumOS older minor")
+ok(UC.meetsMinimumOS("26.0", "15.0") == true, "meetsMinimumOS much newer")
+ok(UC.meetsMinimumOS("9.6", "10.0") == false, "meetsMinimumOS compares numerically")
+ok(UC.meetsMinimumOS(nil, "15.0") == true, "meetsMinimumOS unknown running version")
+ok(UC.meetsMinimumOS("14.6.1", nil) == true, "meetsMinimumOS unknown minimum")
+
 -- parsePortVersion
 do
 	local e, b = UC.parsePortVersion("0.21.0-macos.7")

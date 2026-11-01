@@ -379,6 +379,10 @@ Interactive zoom quality and frame timing need a separate manual check.
     `Verifying…` / `Extracting…`); it returns `"normal"`, so the stock toast and
     "Update Ready" button appear. An unreachable network is treated as "no
     update" so the silent startup check never nags.
+    If the extracted build's `LSMinimumSystemVersion` is newer than this Mac's
+    macOS, it is not staged, since the swapped-in app would refuse to open: the
+    first check says why in a toast, later ones stay quiet, and the cached copy
+    is offered once macOS has been upgraded.
   - **Apply** (`UpdateApply.lua`, run in the main state via `LoadModule`): writes
     a small detached `/bin/sh` helper and quits. The helper waits for the app to
     exit (by bundle path via `pgrep -f`, so no PID is needed), swaps the staged
