@@ -1,7 +1,6 @@
 name: macOS release
-# Builds the native macOS app and uploads it to a draft GitHub Release whenever
-# a version tag like `v0.16.0-macos.1` is pushed; publish the draft by hand once
-# its zip has been launched (see RELEASE.md). Can also be run manually against
+# Builds the native macOS app and publishes it to a GitHub Release whenever a
+# version tag like `v0.16.0-macos.1` is pushed. Can also be run manually against
 # an existing tag via the Actions tab.
 on:
   push:
@@ -89,7 +88,7 @@ jobs:
         run: .release-tooling/tools/macos/check_min_macos.sh "dist/macos-arm64/Path of Building (PoE2).app"
       - name: Check the bundled LuaJIT loads the app's Lua
         run: .release-tooling/tools/macos/check_bundled_lua.sh "dist/macos-arm64/Path of Building (PoE2).app"
-      - name: Upload to a draft release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -119,15 +118,8 @@ jobs:
           See [SECURITY.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/SECURITY.md) for account sign-in and data handling details.
           EOF
 
-          # Create the release as a draft if it doesn't exist yet, then (re)upload
-          # the assets. The in-app updater only sees published releases, so a
-          # draft reaches nobody until someone has launched its zip and published
-          # it. Re-running against an existing release replaces its assets and
-          # leaves it as it was, draft or published.
+          # Create the release if it doesn't exist yet, then (re)upload assets.
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --draft --title "$TAG" --notes-file notes.md
+            gh release create "$TAG" --title "$TAG" --notes-file notes.md
           fi
           gh release upload "$TAG" "$ZIP" "$SUM" --clobber
-          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "true" ]; then
-            echo "::notice title=Draft release::$TAG is a draft. Launch its zip, then publish it: gh release edit $TAG --draft=false"
-          fi

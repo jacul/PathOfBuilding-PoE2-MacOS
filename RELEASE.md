@@ -76,8 +76,7 @@ number and changelog, builds + packages, runs the port tests, smoke-launches
 the app, commits on `develop`, fast-forwards `main`, and tags — erroring out
 at the first failed step (and printing how to undo). Nothing is pushed until
 you confirm at the end; it then pushes `main` + `develop` + tag in one push.
-Watching the release workflow afterwards is manual (Actions tab), and so is
-publishing its draft release once you have launched the zip.
+Watching the release workflow afterwards is manual (Actions tab).
 
 ### Release flow (recommended)
 
@@ -85,11 +84,8 @@ Pushing a tag matching `v*-macos.*` triggers the **macOS release** workflow
 (`.github/workflows/macos-release.yml`), which verifies the tag matches
 `Info.plist`, builds the bundled libraries for macOS 14 and packages on an Apple
 Silicon runner, checks the package still runs on macOS 14 and that its LuaJIT
-loads every Lua file it ships, and uploads the `.zip` + `.zip.sha256` to a new
-**draft** GitHub Release with install/verify notes. Download the zip from the
-draft, launch it, and only then publish the release (its Publish button, or
-`gh release edit <tag> --draft=false`). The in-app updater offers only published
-releases, so no user gets a build before someone has seen it start.
+loads every Lua file it ships, and publishes the `.zip` + `.zip.sha256` to a new
+GitHub Release with install/verify notes.
 
 Before tagging, add a `VERSION[<engine>-macos.<build>][YYYY/MM/DD]` entry at the
 **top** of [`macos/changelog.txt`](macos/changelog.txt) describing the
@@ -117,8 +113,7 @@ fast-forwards all three to the same commit, so:
 - `develop` push → the `macos.yml` `gate` job sees the `v*-macos.*` tag on the
   commit and **skips** the build (the release workflow already builds it). This
   only works if the tag lands in the same push, hence "all three together".
-- tag push → the **macOS release** workflow builds a draft release, which you
-  publish after launching its zip.
+- tag push → the **macOS release** workflow builds + publishes.
 
 Net: one build per release. (If you push `develop` *before* the tag, the gate
 won't see the tag yet and you'll get a redundant develop build — push the tag

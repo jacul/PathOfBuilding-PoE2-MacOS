@@ -11,9 +11,8 @@
 #   7. ask for confirmation, then push main + develop + tag in ONE push
 #
 # Nothing is pushed without the final confirmation; until then everything is
-# local and can be undone (the script prints how). After the push, watching the
-# release workflow (Actions tab) and publishing its draft release once the zip
-# has been launched are manual.
+# local and can be undone (the script prints how). Monitoring the release
+# workflow after the push is manual — watch the Actions tab.
 #
 # Usage:
 #   tools/macos/release.sh [upstream-tag]
@@ -165,14 +164,12 @@ step "Ready to push"
 echo "  commit: $(git -C "${repo_root}" log -1 --oneline develop)"
 echo "  refs:   main, develop, ${tag}  (one push -> one release build)"
 echo
-read -r -p "Push to origin and build the draft release? [y/N] " answer || answer=""
+read -r -p "Push to origin and publish the release? [y/N] " answer || answer=""
 if [[ "${answer}" =~ ^[Yy]$ ]]; then
   git -C "${repo_root}" push origin main develop "${tag}"
   echo
-  echo "Pushed. The 'macOS release' workflow is building ${tag} as a draft release — watch it at:"
+  echo "Pushed. The 'macOS release' workflow is building ${tag} — watch it at:"
   echo "  $(gh repo view --json url -q .url 2>/dev/null || echo "https://github.com/<origin>")/actions"
-  echo "When it's done, launch the draft's zip, then publish it:"
-  echo "  gh release edit ${tag} --draft=false"
 else
   echo
   echo "Not pushed. Everything is committed and tagged locally; push later with:"
